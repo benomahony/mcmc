@@ -9,7 +9,7 @@ resamples daily throughput 10,000× to give 50/70/85/95% answers.
 ## Install
 
 ```bash
-claude plugin marketplace add /path/to/mcmc
+claude plugin marketplace add benomahony/mcmc
 claude plugin install mcmc@mcmc
 ```
 
