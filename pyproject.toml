@@ -1,0 +1,7 @@
+[project]
+name = "mcmc"
+version = "0.1.0"
+description = "Monte Carlo delivery forecasts from Jira throughput (Claude Code plugin)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []

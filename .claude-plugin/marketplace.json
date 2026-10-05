@@ -1,0 +1,11 @@
+{
+  "name": "mcmc",
+  "owner": { "name": "Ben O'Mahony" },
+  "plugins": [
+    {
+      "name": "mcmc",
+      "source": "./",
+      "description": "Monte Carlo delivery forecasts from Jira throughput"
+    }
+  ]
+}

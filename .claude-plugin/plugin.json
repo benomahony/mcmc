@@ -1,0 +1,7 @@
+{
+  "name": "mcmc",
+  "version": "0.1.0",
+  "description": "Monte Carlo delivery forecasts (when will it be done / how much by a date) from Jira throughput",
+  "author": { "name": "Ben O'Mahony" },
+  "keywords": ["jira", "forecasting", "monte-carlo", "agile"]
+}
