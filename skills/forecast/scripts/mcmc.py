@@ -13,6 +13,7 @@ Subcommands:
   calibrate [SCOPE]      score past forecasts against what actually happened
   stats SCOPE            weekly throughput/arrivals, lead time, backlog snapshots
   aging SCOPE            open items older than their type's usual lead time
+  report SCOPE           all of the above as one self-contained HTML page
 
 DB: --db, else $MCMC_DB, else $CLAUDE_PLUGIN_DATA/mcmc.duckdb, else
 ~/.local/share/mcmc/mcmc.duckdb.
@@ -861,6 +862,34 @@ def cmd_aging(con, args) -> None:
     print("age and lead time in days since creation; 'older than' = share of recently completed items it has outlived")
 
 
+# --- report -----------------------------------------------------------------
+
+
+def cmd_report(con, args) -> None:
+    import report
+
+    common = dict(
+        scope=args.scope, window=args.window, history_end=None, start=None, seed=args.seed, runs=args.runs,
+        max_days=1095, no_record=True, target_date=args.target_date,
+    )
+    data = {
+        "scope": args.scope,
+        "forecast": forecast_data(
+            con, argparse.Namespace(**common, type=None, by=None, items=None, at_least=None, no_scope_growth=False)
+        ),
+        "epics": epics_data(
+            con, argparse.Namespace(**common, epic=None, order=args.order, wip=args.wip, epic_share=args.epic_share)
+        ),
+        "aging": aging_data(con, argparse.Namespace(scope=args.scope, window=args.window, all=True)),
+        "stats": stats_data(con, argparse.Namespace(scope=args.scope, window=args.window, snapshots=10)),
+        "calibrate": calibrate_data(con, argparse.Namespace(scope=args.scope)),
+    }
+    out = args.out or (args.db or default_db()).parent / "reports" / f"{args.scope}-{data['forecast']['history']['end']}.html"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(report.render(data))
+    print(out)
+
+
 # --- cli --------------------------------------------------------------------
 
 
@@ -926,6 +955,17 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--all", action="store_true", help="list every open item, not just flagged ones")
     p.add_argument("--json", action="store_true")
 
+    p = sub.add_parser("report", help="write a self-contained HTML report and print its path")
+    p.add_argument("scope")
+    p.add_argument("--out", type=Path, help="output file (default: reports/ next to the DB)")
+    p.add_argument("--window", type=int, default=90)
+    p.add_argument("--target-date", type=date.fromisoformat, help="add the chance of finishing by this date")
+    p.add_argument("--order", action="append", help="epic priority order, comma-separated")
+    p.add_argument("--wip", type=int, default=1)
+    p.add_argument("--epic-share", type=float)
+    p.add_argument("--runs", type=int, default=10_000)
+    p.add_argument("--seed", type=int)
+
     p = sub.add_parser("stats", help="weekly throughput, lead time by type, backlog snapshots")
     p.add_argument("scope")
     p.add_argument("--window", type=int, default=90)
@@ -943,6 +983,7 @@ def main(argv: list[str] | None = None) -> None:
             "calibrate": cmd_calibrate,
             "stats": cmd_stats,
             "aging": cmd_aging,
+            "report": cmd_report,
         }[args.cmd](con, args)
     finally:
         con.close()

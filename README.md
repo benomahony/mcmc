@@ -32,6 +32,9 @@ uv run $M forecast PAY                        # when will the open backlog be do
 uv run $M forecast PAY --by 2026-12-18        # how many by a date?
 uv run $M stats PAY                           # throughput, arrivals, lead time by type
 uv run $M calibrate                           # how past forecasts held up
+uv run $M epics PAY --order PAY-98,PAY-123    # per-epic: current pace, priority order, sole focus
+uv run $M aging PAY                           # open items older than their type usually takes
+uv run $M report PAY                          # all of it as one self-contained HTML page
 ```
 
 The DB lives at `$MCMC_DB`, else `$CLAUDE_PLUGIN_DATA/mcmc.duckdb`, else

@@ -279,3 +279,25 @@ def test_every_command_prints_text(db, capsys, tmp_path):
         ["aging", "PAY"],
     ):
         assert run(db, capsys, *argv).strip(), argv
+
+
+def test_report_is_self_contained_html_and_escapes_jira_text(db, capsys, tmp_path):
+    seed_steady(db, capsys, tmp_path)
+    hostile = tmp_path / "hostile.csv"
+    hostile.write_text(
+        "key,type,created,resolved,status_category,epic\n"
+        f"X-1,<img src=x onerror=alert(1)>,{START},,In Progress,<script>alert(1)</script>\n"
+    )
+    run(db, capsys, "ingest", "PAY", str(hostile))
+    set_last_sync(db, START + timedelta(60))
+    out = tmp_path / "r.html"
+    printed = run(db, capsys, "report", "PAY", "--runs", "300", "--seed", "1", "--target-date", "2026-12-01",
+                  "--order", "<script>alert(1)</script>", "--out", str(out))
+    assert printed.strip() == str(out)
+    html = out.read_text()
+    for section in ("When will the open backlog be done?", "Throughput and intake", "Epics", "Ageing open work", "Track record"):
+        assert section in html
+    assert "<script>alert" not in html and "<img src=x" not in html
+    assert "&lt;script&gt;" in html
+    assert "http://" not in html and "https://" not in html  # no external requests
+    assert "None" not in html and "nan" not in html

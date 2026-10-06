@@ -1,6 +1,6 @@
 ---
 name: forecast
-description: Monte Carlo delivery forecast from Jira history. Use when the user asks "when will this epic/project/backlog be done?", "when will each epic land?", "what work is stuck or ageing?", "how many items can we finish by <date>?", wants a probabilistic/throughput-based forecast, throughput or lead-time stats, or wants to check how accurate past forecasts were, for a Jira project, epic, board, or JQL filter.
+description: Monte Carlo delivery forecast from Jira history. Use when the user asks "when will this epic/project/backlog be done?", "when will each epic land?", "what work is stuck or ageing?", wants a forecast report/dashboard to share, "how many items can we finish by <date>?", wants a probabilistic/throughput-based forecast, throughput or lead-time stats, or wants to check how accurate past forecasts were, for a Jira project, epic, board, or JQL filter.
 ---
 
 # Jira Monte Carlo forecast
@@ -83,6 +83,7 @@ uv run "$M" epics <scope> [--epic PAY-123]...         # when will each open epic
 uv run "$M" epics <scope> --order PAY-98,PAY-123 [--wip 2]   # ...if worked in this priority order
 uv run "$M" stats <scope>                             # weekly throughput/arrivals, lead time by type, snapshots
 uv run "$M" aging <scope> [--all]                     # open items older than their type's p85/p95 lead time
+uv run "$M" report <scope> [--order ...] [--target-date ...]  # everything above as one HTML page; prints its path
 uv run "$M" calibrate [<scope>]                       # how past forecasts held up
 ```
 
@@ -122,5 +123,12 @@ Add `--json` to post-process.
   usually deprioritised, not stuck. Lead time runs from creation, and only finished items
   set the baseline, so frame flags as "older than nearly everything we finish", not "late".
   Suggest closing or re-scoping stale to-do items: they inflate every backlog forecast.
+- **HTML report**: when the user asks for a report, dashboard, or something to share — or
+  after answering, offer it in one line — run `report` with the same `--order` /
+  `--target-date` you used, and give them the printed path (`open <path>` on macOS). The page
+  is self-contained (no network), with light/dark themes, hover details and a table view of
+  every chart. If your environment can publish HTML pages (e.g. an artifact tool), offer to
+  publish it so it has a shareable link. Still give the headline in chat; the page supports
+  it, it doesn't replace it.
 - If `calibrate` has resolved forecasts for this scope, add one line on track record
   (e.g. "past p85 answers held 7/9 times").
