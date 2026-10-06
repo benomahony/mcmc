@@ -330,6 +330,18 @@ def record(con, scope, kind, growth, start, target, items, types, h_start, h_end
     return fid
 
 
+def chance(results: list[float], ok) -> float:
+    return round(sum(map(ok, results)) / len(results), 3)
+
+
+def target_days(start: date, target: date | None) -> int | None:
+    if target is None:
+        return None
+    if target <= start:
+        sys.exit("error: --target-date must be after the forecast start")
+    return (target - start).days
+
+
 def cmd_forecast(con, args) -> None:
     h_start, h_end = history_window(con, args.scope, args.window, args.history_end)
     types = args.type or None
@@ -370,6 +382,9 @@ def cmd_forecast(con, args) -> None:
         pct = {f"p{p}": percentile(results, 100 - p) for p in PERCENTILES}
         out.update(kind="how_many", target_date=args.by.isoformat(), percentiles=pct)
         distributions["items"] = results
+        if args.at_least is not None:
+            out["at_least"] = args.at_least
+            out["chance"] = chance(results, lambda r: r >= args.at_least)
         if not args.no_record:
             out["forecast_id"] = record(
                 con, args.scope, "how_many", False, start, args.by, None, types, h_start, h_end, pct
@@ -380,6 +395,8 @@ def cmd_forecast(con, args) -> None:
         if items <= 0:
             sys.exit("error: nothing remaining in scope")
         out.update(kind="when", items=items, percentiles={}, finished_within_limit={})
+        if (deadline := target_days(start, args.target_date)) is not None:
+            out.update(target_date=args.target_date.isoformat(), chance={})
         models = [("no_growth", None)] + ([] if args.no_scope_growth else [("scope_growth", arrivals)])
         for name, arr in models:
             results = simulate_when(throughput, items, args.runs, rng, arrivals=arr, max_days=args.max_days)
@@ -387,6 +404,8 @@ def cmd_forecast(con, args) -> None:
             out["percentiles"][name] = pct
             out["finished_within_limit"][name] = round(sum(r != math.inf for r in results) / len(results), 4)
             distributions[f"days ({name})"] = results
+            if deadline is not None:
+                out["chance"][name] = chance(results, lambda r: r <= deadline)
             if not args.no_record:
                 out.setdefault("forecast_ids", {})[name] = record(
                     con, args.scope, "when", arr is not None, start, None, items, types, h_start, h_end, pct,
@@ -409,6 +428,8 @@ def cmd_forecast(con, args) -> None:
         print(f"\nItems completed between {start} and {args.by}:")
         for k, v in out["percentiles"].items():
             print(f"  {k[1:]}% confidence: at least {v}")
+        if "chance" in out:
+            print(f"  Chance of at least {args.at_least}: {out['chance']:.0%}")
     else:
         print(f"\nWhen will {out['items']} items be done (from {start})?")
         names = list(out["percentiles"])
@@ -416,6 +437,10 @@ def cmd_forecast(con, args) -> None:
         for p in PERCENTILES:
             row = [out["percentiles"][n][f"p{p}"] or f">{args.max_days}d" for n in names]
             print(f"  {p:>3}%  " + "".join(f"{v:>14}" for v in row))
+        if "chance" in out:
+            print("  chance by " + str(args.target_date))
+            for n in names:
+                print(f"    {n}: {out['chance'][n]:.0%}")
         for n in names:
             if out["finished_within_limit"][n] < 1:
                 print(f"  {n}: only {out['finished_within_limit'][n]:.0%} of runs finished within {args.max_days} days")
@@ -452,6 +477,7 @@ def cmd_epics(con, args) -> None:
         k: ("done" if d else "open")
         for k, d in con.execute("SELECT key, done FROM issues WHERE scope = ? AND issue_type = 'Epic'", [args.scope]).fetchall()
     }
+    deadline = target_days(start, args.target_date)
     epics = []
     for epic, keys in rows:
         keys = keys or []
@@ -467,6 +493,8 @@ def cmd_epics(con, args) -> None:
             if any(own):
                 results = simulate_when(own, len(keys), args.runs, rng, max_days=args.max_days)
                 e["current_pace"] = {f"p{p}": when_date(start, percentile(results, p)) for p in PERCENTILES}
+                if deadline is not None:
+                    e.setdefault("chance", {})["current_pace"] = chance(results, lambda r: r <= deadline)
                 if not args.no_record:
                     e["forecast_id"] = record(
                         con, args.scope, "when", False, start, None, len(keys), None, h_start, h_end,
@@ -475,6 +503,8 @@ def cmd_epics(con, args) -> None:
             if any(team):
                 results = simulate_when(team, len(keys), args.runs, rng, max_days=args.max_days)
                 e["sole_focus"] = {f"p{p}": when_date(start, percentile(results, p)) for p in PERCENTILES}
+                if deadline is not None:
+                    e.setdefault("chance", {})["sole_focus"] = chance(results, lambda r: r <= deadline)
         epics.append(e)
 
     if args.order:
@@ -494,6 +524,8 @@ def cmd_epics(con, args) -> None:
         )
         for k, r in zip(order, results):
             by_key[k]["priority"] = {f"p{p}": when_date(start, percentile(r, p)) for p in PERCENTILES}
+            if deadline is not None:
+                by_key[k].setdefault("chance", {})["priority"] = chance(r, lambda d: d <= deadline)
         priority = {"order": order, "wip": args.wip, "epic_share": round(share, 3)}
 
     out = {
@@ -505,6 +537,8 @@ def cmd_epics(con, args) -> None:
     }
     if args.order:
         out["priority"] = priority
+    if deadline is not None:
+        out["target_date"] = args.target_date.isoformat()
     if args.json:
         print(json.dumps(out, indent=2, default=str))
         return
@@ -513,9 +547,12 @@ def cmd_epics(con, args) -> None:
         return
     print(f"Scope {args.scope}: epics from {start}, history {h_start} → {h_end} ({sum(team)} team completions)\n")
     head = f"{'epic':<12} {'status':<10} {'open':>4} {'done/window':>11}   {'current pace p50':>16} {'p85':>11}   {'sole focus p85':>14}"
+    models_shown = ["current_pace", "sole_focus"] + (["priority"] if args.order else [])
     if args.order:
         epics.sort(key=lambda e: priority["order"].index(e["epic"]) if e["epic"] in priority["order"] else 10**6)
         head += f"   {'priority p85':>12}"
+    if deadline is not None:
+        head += f"   chance by {args.target_date} ({'/'.join(m.split('_')[0] for m in models_shown)})"
     print(head)
     for e in epics:
         pace, focus = e["current_pace"], e["sole_focus"]
@@ -530,6 +567,9 @@ def cmd_epics(con, args) -> None:
         if args.order:
             prio = e.get("priority")
             line += f"   {(prio['p85'] or f'>{args.max_days}d') if prio else 'paused':>12}"
+        if deadline is not None:
+            c = e.get("chance", {})
+            line += "   " + " ".join(f"{c[m]:>4.0%}" if m in c else "   -" for m in models_shown)
         print(line)
     print(f"\n{unparented_open} open items have no epic.")
     if stale := [e["epic"] for e in epics if e["status"] == "done" and e["open"]]:
@@ -804,6 +844,8 @@ def main(argv: list[str] | None = None) -> None:
     goal = p.add_mutually_exclusive_group()
     goal.add_argument("--items", type=int, help="override remaining count (default: open items in DB)")
     goal.add_argument("--by", type=date.fromisoformat, help="how many items by this date")
+    p.add_argument("--target-date", type=date.fromisoformat, help="when-forecasts: also give the chance of finishing by this date")
+    p.add_argument("--at-least", type=int, help="with --by: also give the chance of finishing at least this many")
     p.add_argument("--type", action="append", help="restrict to issue type (repeatable)")
     p.add_argument("--window", type=int, default=90, help="history window in days (default 90)")
     p.add_argument("--history-end", type=date.fromisoformat, help="default: date of last sync")
@@ -820,6 +862,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--epic", action="append", help="only these epic keys (repeatable)")
     p.add_argument("--order", action="append", help="priority order of epic keys, comma-separated (adds a priority forecast)")
     p.add_argument("--wip", type=int, default=1, help="epics worked at once in priority order (default 1)")
+    p.add_argument("--target-date", type=date.fromisoformat, help="also give each epic's chance of finishing by this date")
     p.add_argument(
         "--epic-share", type=float, help="share of team throughput spent on epic work (default: historical share)"
     )

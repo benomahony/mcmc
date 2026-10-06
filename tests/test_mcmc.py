@@ -230,3 +230,32 @@ def test_aging_flags_items_older_than_their_type_lead_time(db, capsys, tmp_path)
     assert risk["O-2"]["risk"] == "at risk"
     assert risk["O-4"]["basis"] == "all types"
     assert len(json.loads(run(db, capsys, "aging", "PAY", "--all", "--json"))["items"]) == 4
+
+
+def test_chance_of_hitting_target_date_and_count(db, capsys, tmp_path):
+    seed_steady(db, capsys, tmp_path)  # Stories: exactly 1/day; 20 open Stories
+    end = START + timedelta(60)
+    f = lambda *a: json.loads(run(db, capsys, "forecast", "PAY", "--type", "Story", "--window", "60", "--no-record", "--json", *a))
+    assert f("--target-date", str(end + timedelta(20)))["chance"]["no_growth"] == 1.0
+    assert f("--target-date", str(end + timedelta(19)))["chance"]["no_growth"] == 0.0
+    assert f("--by", str(end + timedelta(10)), "--at-least", "10")["chance"] == 1.0
+    assert f("--by", str(end + timedelta(10)), "--at-least", "11")["chance"] == 0.0
+    with pytest.raises(SystemExit):
+        f("--target-date", str(end))
+
+
+def test_epics_chance_by_target_date(db, capsys, tmp_path):
+    rows = ["key,type,created,resolved,status_category,epic"]
+    rows += [f"T-{d},Story,{START},{START + timedelta(d)},Done,E-1" for d in range(60)]  # E-1: 1/day
+    rows += [f"C-{i},Story,{START},,To Do,E-1" for i in range(5)]
+    path = tmp_path / "e.csv"
+    path.write_text("\n".join(rows))
+    run(db, capsys, "ingest", "PAY", str(path), "--full")
+    end = START + timedelta(59)
+    set_last_sync(db, end)
+    e = lambda days: json.loads(
+        run(db, capsys, "epics", "PAY", "--window", "60", "--order", "E-1", "--epic-share", "1",
+            "--target-date", str(end + timedelta(days)), "--no-record", "--json")
+    )["epics"][0]["chance"]
+    assert e(5) == {"current_pace": 1.0, "sole_focus": 1.0, "priority": 1.0}
+    assert e(4) == {"current_pace": 0.0, "sole_focus": 0.0, "priority": 0.0}

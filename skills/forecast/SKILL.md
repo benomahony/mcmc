@@ -75,6 +75,8 @@ wasn't, typically because it was resolved before the window), fetch them with
 uv run "$M" forecast <scope> [--type Story]...        # when will the open backlog be done?
 uv run "$M" forecast <scope> --items 42               # when will N items be done?
 uv run "$M" forecast <scope> --by 2026-12-18          # how many by a date?
+uv run "$M" forecast <scope> --target-date 2026-12-01 # ...plus the chance of being done by a date
+uv run "$M" forecast <scope> --by 2026-12-18 --at-least 40   # chance of finishing at least N by a date
 uv run "$M" epics <scope> [--epic PAY-123]...         # when will each open epic be done?
 uv run "$M" epics <scope> --order PAY-98,PAY-123 [--wip 2]   # ...if worked in this priority order
 uv run "$M" stats <scope>                             # weekly throughput/arrivals, lead time by type, snapshots
@@ -90,7 +92,8 @@ completions — realistic, and recorded for calibration) and **sole focus** (who
 throughput on only that epic — the best case). With `--order`, it adds a **priority**
 forecast: epics worked in that order, `--wip` at a time, using the share of team throughput
 that historically went to epic work (`--epic-share` to override, e.g. "if we spent 60% on
-epics"); epics not listed are treated as paused. Take the order from the user, else from Jira
+epics"); epics not listed are treated as paused. `--target-date` on `epics` adds each
+epic's chance of landing by that date under every model. Take the order from the user, else from Jira
 (`issuetype = Epic AND statusCategory != Done ORDER BY Rank`), and say which you used.
 Add `--json` to post-process.
 
@@ -108,6 +111,9 @@ Add `--json` to post-process.
   focus is the finding: the team's attention is spread thin; prioritising shortens it.
   Call out epics marked done that still have open children — the epic status is wrong or
   the children belong elsewhere.
+- When the user names a date or a number ("will we make 1 Dec?", "can we do 40?"), answer
+  with the **chance** first ("7% if nothing is added, ~0% at the current intake"), then the
+  percentile table for context.
 - For *how many*, higher confidence means a **lower** number ("85% likely to finish at least N").
 - For aging, lead with counts (stale = older than p95 lead time, at risk = older than p85),
   then the oldest in-progress items first — those are most likely stuck; old to-do items are
