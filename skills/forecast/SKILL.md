@@ -76,6 +76,7 @@ uv run "$M" forecast <scope> [--type Story]...        # when will the open backl
 uv run "$M" forecast <scope> --items 42               # when will N items be done?
 uv run "$M" forecast <scope> --by 2026-12-18          # how many by a date?
 uv run "$M" epics <scope> [--epic PAY-123]...         # when will each open epic be done?
+uv run "$M" epics <scope> --order PAY-98,PAY-123 [--wip 2]   # ...if worked in this priority order
 uv run "$M" stats <scope>                             # weekly throughput/arrivals, lead time by type, snapshots
 uv run "$M" calibrate [<scope>]                       # how past forecasts held up
 ```
@@ -85,7 +86,12 @@ runs two models: **no_growth** (fixed backlog) and **scope_growth** (each simula
 adds that historical day's created items). Epic issues are containers and never count as
 items. `epics` gives two answers per epic: **current pace** (resampling that epic's own
 completions — realistic, and recorded for calibration) and **sole focus** (whole-team
-throughput on only that epic — the best case). Add `--json` to post-process.
+throughput on only that epic — the best case). With `--order`, it adds a **priority**
+forecast: epics worked in that order, `--wip` at a time, using the share of team throughput
+that historically went to epic work (`--epic-share` to override, e.g. "if we spent 60% on
+epics"); epics not listed are treated as paused. Take the order from the user, else from Jira
+(`issuetype = Epic AND statusCategory != Done ORDER BY Rank`), and say which you used.
+Add `--json` to post-process.
 
 ## 4. Report
 

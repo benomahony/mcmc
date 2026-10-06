@@ -70,6 +70,47 @@ def simulate_when(
     return sorted(results)
 
 
+def simulate_priority(
+    history: list[int],
+    remaining: list[int],
+    runs: int,
+    rng: random.Random,
+    share: float = 1.0,
+    wip: int = 1,
+    max_days: int = 3650,
+) -> list[list[float]]:
+    """Days until each of several work streams (e.g. epics), worked in the given order, is done.
+
+    Each completed item goes to this work with probability `share` (the rest of the team's
+    throughput is spent elsewhere) and is assigned round-robin across the first `wip`
+    unfinished streams. Returns one sorted list of finish days per stream (math.inf if not
+    finished within max_days).
+    """
+    if not any(history):
+        sys.exit("error: no completions in the history window, cannot forecast")
+    finish: list[list[float]] = [[] for _ in remaining]
+    for _ in range(runs):
+        left = list(remaining)
+        done_day = [0 if n <= 0 else math.inf for n in left]
+        day = turn = 0
+        while day < max_days and math.inf in done_day:
+            day += 1
+            for _ in range(rng.choice(history)):
+                if share < 1 and rng.random() >= share:
+                    continue
+                active = [i for i, d in enumerate(done_day) if d == math.inf][:wip]
+                if not active:
+                    break
+                j = active[turn % len(active)]
+                turn += 1
+                left[j] -= 1
+                if left[j] <= 0:
+                    done_day[j] = day
+        for i, d in enumerate(done_day):
+            finish[i].append(d)
+    return [sorted(f) for f in finish]
+
+
 def simulate_how_many(history: list[int], days: int, runs: int, rng: random.Random) -> list[int]:
     return sorted(sum(rng.choices(history, k=days)) for _ in range(runs))
 

@@ -33,7 +33,16 @@ from pathlib import Path
 import duckdb
 
 sys.path.insert(0, str(Path(__file__).parent))
-from forecast import PERCENTILES, daily_throughput, histogram, percentile, simulate_how_many, simulate_when, when_date  # noqa: E402
+from forecast import (  # noqa: E402
+    PERCENTILES,
+    daily_throughput,
+    histogram,
+    percentile,
+    simulate_how_many,
+    simulate_priority,
+    simulate_when,
+    when_date,
+)
 
 FULL_SYNC_EVERY = timedelta(days=7)
 
@@ -453,6 +462,25 @@ def cmd_epics(con, args) -> None:
                 e["sole_focus"] = {f"p{p}": when_date(start, percentile(results, p)) for p in PERCENTILES}
         epics.append(e)
 
+    if args.order:
+        order = [k.strip() for k in ",".join(args.order).split(",") if k.strip()]
+        by_key = {e["epic"]: e for e in epics}
+        if unknown := [k for k in order if k not in by_key]:
+            sys.exit(f"error: not open epics in scope: {', '.join(unknown)}")
+        share = args.epic_share
+        if share is None:
+            share = con.execute(
+                """SELECT count(*) FILTER (epic IS NOT NULL) / greatest(count(*), 1) FROM issues
+                   WHERE scope = ? AND resolved BETWEEN ? AND ? AND coalesce(issue_type, '') <> 'Epic'""",
+                [args.scope, h_start, h_end],
+            ).fetchone()[0]
+        results = simulate_priority(
+            team, [by_key[k]["open"] for k in order], args.runs, rng, share=share, wip=args.wip, max_days=args.max_days
+        )
+        for k, r in zip(order, results):
+            by_key[k]["priority"] = {f"p{p}": when_date(start, percentile(r, p)) for p in PERCENTILES}
+        priority = {"order": order, "wip": args.wip, "epic_share": round(share, 3)}
+
     out = {
         "scope": args.scope,
         "history": {"start": h_start.isoformat(), "end": h_end.isoformat(), "team_completed": sum(team)},
@@ -460,6 +488,8 @@ def cmd_epics(con, args) -> None:
         "epics": epics,
         "open_without_epic": unparented_open,
     }
+    if args.order:
+        out["priority"] = priority
     if args.json:
         print(json.dumps(out, indent=2, default=str))
         return
@@ -467,7 +497,11 @@ def cmd_epics(con, args) -> None:
         print(f"No open epics in scope {args.scope} (were epic links ingested?)")
         return
     print(f"Scope {args.scope}: epics from {start}, history {h_start} → {h_end} ({sum(team)} team completions)\n")
-    print(f"{'epic':<12} {'status':<10} {'open':>4} {'done/window':>11}   {'current pace p50':>16} {'p85':>11}   {'sole focus p85':>14}")
+    head = f"{'epic':<12} {'status':<10} {'open':>4} {'done/window':>11}   {'current pace p50':>16} {'p85':>11}   {'sole focus p85':>14}"
+    if args.order:
+        epics.sort(key=lambda e: priority["order"].index(e["epic"]) if e["epic"] in priority["order"] else 10**6)
+        head += f"   {'priority p85':>12}"
+    print(head)
     for e in epics:
         pace, focus = e["current_pace"], e["sole_focus"]
         if not e["open"]:
@@ -477,11 +511,20 @@ def cmd_epics(con, args) -> None:
         else:
             p50, p85 = (pace[k] or f">{args.max_days}d" for k in ("p50", "p85"))
         f85 = (focus["p85"] or f">{args.max_days}d") if focus else "-"
-        print(f"{e['epic']:<12} {e['status']:<10} {e['open']:>4} {e['completed_in_window']:>11}   {p50:>16} {p85:>11}   {f85:>14}")
+        line = f"{e['epic']:<12} {e['status']:<10} {e['open']:>4} {e['completed_in_window']:>11}   {p50:>16} {p85:>11}   {f85:>14}"
+        if args.order:
+            prio = e.get("priority")
+            line += f"   {(prio['p85'] or f'>{args.max_days}d') if prio else 'paused':>12}"
+        print(line)
     print(f"\n{unparented_open} open items have no epic.")
     if stale := [e["epic"] for e in epics if e["status"] == "done" and e["open"]]:
         print(f"Epics marked done but with open children: {', '.join(stale)}")
     print("current pace = resampling the epic's own completions; sole focus = whole team on this epic only.")
+    if args.order:
+        print(
+            f"priority = epics worked in the order above, {args.wip} at a time, with {priority['epic_share']:.0%} "
+            "of team throughput going to epic work; unlisted epics paused."
+        )
 
 
 # --- calibrate --------------------------------------------------------------
@@ -690,6 +733,11 @@ def main(argv: list[str] | None = None) -> None:
     p = sub.add_parser("epics", help="per-epic forecasts (current pace vs sole focus)")
     p.add_argument("scope")
     p.add_argument("--epic", action="append", help="only these epic keys (repeatable)")
+    p.add_argument("--order", action="append", help="priority order of epic keys, comma-separated (adds a priority forecast)")
+    p.add_argument("--wip", type=int, default=1, help="epics worked at once in priority order (default 1)")
+    p.add_argument(
+        "--epic-share", type=float, help="share of team throughput spent on epic work (default: historical share)"
+    )
     p.add_argument("--window", type=int, default=90)
     p.add_argument("--history-end", type=date.fromisoformat, help="default: date of last sync")
     p.add_argument("--start", type=date.fromisoformat, help="forecast start (default: history end)")

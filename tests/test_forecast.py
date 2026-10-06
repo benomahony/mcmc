@@ -2,7 +2,7 @@ import math
 import random
 from datetime import date
 
-from forecast import daily_throughput, parse_dates, percentile, simulate_how_many, simulate_when
+from forecast import daily_throughput, parse_dates, percentile, simulate_how_many, simulate_priority, simulate_when
 
 
 def test_parse_dates_handles_lines_json_and_timestamps():
@@ -31,3 +31,19 @@ def test_scope_growth_slows_completion():
 def test_non_converging_runs_are_capped_as_inf():
     results = simulate_when([1], 5, 10, random.Random(0), arrivals=[1], max_days=50)
     assert all(r == math.inf for r in results)
+
+
+def test_priority_sequential_and_wip():
+    rng = random.Random(0)
+    first, second = simulate_priority([2], [2, 4], 10, rng)
+    assert set(first) == {1} and set(second) == {3}
+    # Two at a time, round-robin: the small one finishes on day 2, the big one on day 3.
+    first, second = simulate_priority([2], [2, 4], 10, rng, wip=2)
+    assert set(first) == {2} and set(second) == {3}
+
+
+def test_priority_share_slows_everything():
+    rng = random.Random(0)
+    (full,) = simulate_priority([4], [20], 500, rng)
+    (half,) = simulate_priority([4], [20], 500, rng, share=0.5)
+    assert percentile(half, 50) > percentile(full, 50)

@@ -187,6 +187,17 @@ def test_epics_forecast_current_pace_vs_sole_focus(db, capsys, tmp_path):
     assert (e2["epic"], e2["current_pace"]) == ("E-2", None)  # no completions → no pace forecast
     assert out["open_without_epic"] == 0
 
+    prio = json.loads(run(db, capsys, "epics", "PAY", "--order", "E-1", "--window", "60", "--no-record", "--json"))
+    assert prio["priority"] == {"order": ["E-1"], "wip": 1, "epic_share": 0.125}  # 15 of 120 completions
+    # Prioritising E-1 with half the team's throughput lands it between its current pace and sole focus.
+    prio = json.loads(
+        run(db, capsys, "epics", "PAY", "--order", "E-1", "--epic-share", "0.5", "--window", "60", "--no-record", "--json")
+    )
+    e1 = next(e for e in prio["epics"] if e["epic"] == "E-1")
+    assert e1["sole_focus"]["p85"] < e1["priority"]["p85"] < e1["current_pace"]["p85"]
+    with pytest.raises(SystemExit):
+        run(db, capsys, "epics", "PAY", "--order", "NOPE-1")
+
     # Epic issues themselves are not backlog items.
     assert json.loads(run(db, capsys, "forecast", "PAY", "--no-record", "--json"))["items"] == 7
 
