@@ -24,7 +24,13 @@ Before anything else, confirm the two prerequisites and stop with the fix if eit
   If none is connected, tell the user to add one and authenticate with `/mcp`:
   `claude mcp add --transport http atlassian https://mcp.atlassian.com/v1/mcp`.
   If one is listed but its calls fail with an auth error, tell them to re-authenticate with `/mcp`.
-- **uv**: `uv --version` must succeed; if not, point them to https://docs.astral.sh/uv/.
+- **uv**: if `uv --version` fails, use the no-dependency fallback instead of the steps below:
+  fetch `resolved >= -<window>d` and count the open items with the Jira MCP, write the
+  resolution dates one per line, then
+  `python3 "${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/forecast.py" dates.txt --items <open count>`
+  (or `--by <date>`). It answers *when* and *how many* only, with no stored history, scope
+  growth, epics, calibration or report, so say so and suggest installing
+  [uv](https://docs.astral.sh/uv/) for the rest.
 
 ## 1. Pin down the question
 

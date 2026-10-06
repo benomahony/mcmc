@@ -46,7 +46,7 @@ The DB lives at `$MCMC_DB`, else `$CLAUDE_PLUGIN_DATA/mcmc.duckdb`, else
 `~/.local/share/mcmc/mcmc.duckdb`. Reports are kept next to it in `reports/<scope>/`, one
 timestamped file per run, with `reports/index.html` listing them all.
 
-The simulator on its own is stdlib-only and takes plain completion dates:
+Without `uv`, the skill falls back to the simulator on its own, which is stdlib-only and takes plain completion dates:
 
 ```bash
 python3 skills/forecast/scripts/forecast.py dates.txt --items 40 --history-start 2026-07-01
