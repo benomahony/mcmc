@@ -640,7 +640,9 @@ def render(d: dict) -> str:
         )
     if target and chance is not None:
         bullets.append(f"There's a <b>{pct(chance)} chance</b> of clearing today's backlog by {long_date(target)}, even with nothing new added.")
-    if plan:
+    if plan and prio.get("note"):
+        bullets.append(f"The epic plan can't be forecast: {escape(prio['note'])}.")
+    elif plan:
         last = plan[-1].get("priority") or {}
         slowest = max((e["current_pace"]["p85"] for e in plan if e.get("current_pace") and e["current_pace"]["p85"]), default=None)
         no_pace = [e["epic"] for e in plan if not e.get("current_pace")]
@@ -749,7 +751,8 @@ def render(d: dict) -> str:
         head = ["Epic", "Open items", "In the plan (85%)", "At current pace (85%)"] + ([f"Chance by {long_date(target_ep)}"] if target_ep else [])
         sections.append(
             f"""<section aria-labelledby="s-plan"><h2 id="s-plan">When will the planned epics land?</h2>
-<p class="answer">Worked one at a time in this order, the last lands by <b>{long_date((plan[-1].get('priority') or {}).get('p85'))}</b> (85% confidence).</p>
+<p class="answer">{f"Can't forecast the plan: {escape(prio['note'])}." if prio.get("note") else
+    f"Worked one at a time in this order, the last lands by <b>{long_date((plan[-1].get('priority') or {}).get('p85'))}</b> (85% confidence)."}</p>
 <p class="lede">"In the plan" assumes the team works these epics in order, {prio['wip']} at a time, spending {prio['epic_share']:.0%} of its
 capacity on epic work as it has recently, with other epics paused. "At current pace" assumes effort stays spread as it is today.</p>
 {legend}{responsive(epic_chart, plan, _d(ep['start']), True, max_days)}

@@ -40,6 +40,8 @@ import duckdb
 sys.path.insert(0, str(Path(__file__).parent))
 from forecast import (  # noqa: E402
     PERCENTILES,
+    Plan,
+    Sim,
     daily_throughput,
     histogram,
     percentile,
@@ -427,7 +429,7 @@ def forecast_data(con, args) -> dict:
         horizon = (args.by - start).days
         if horizon <= 0:
             sys.exit("error: --by must be after the forecast start")
-        results = simulate_how_many(throughput, horizon, args.runs, rng)
+        results = simulate_how_many(throughput, horizon, Sim(args.runs, rng))
         pct = {f"p{p}": percentile(results, 100 - p) for p in PERCENTILES}
         out.update(kind="how_many", target_date=args.by.isoformat(), percentiles=pct)
         distributions["items"] = results
@@ -448,7 +450,7 @@ def forecast_data(con, args) -> dict:
             out.update(target_date=args.target_date.isoformat(), chance={})
         models = [("no_growth", None)] + ([] if args.no_scope_growth else [("scope_growth", arrivals)])
         for name, arr in models:
-            results = simulate_when(throughput, items, args.runs, rng, arrivals=arr, max_days=args.max_days)
+            results = simulate_when(throughput, items, Sim(args.runs, rng, args.max_days), arrivals=arr)
             pct = {f"p{p}": when_date(start, percentile(results, p)) for p in PERCENTILES}
             out["percentiles"][name] = pct
             out["finished_within_limit"][name] = round(sum(r != math.inf for r in results) / len(results), 4)
@@ -547,7 +549,7 @@ def epics_data(con, args) -> dict:
         e = {"epic": epic, "status": epic_status.get(epic, "not synced"), "open": len(keys), "completed_in_window": sum(own), "current_pace": None, "sole_focus": None}
         if keys:
             if any(own):
-                results = simulate_when(own, len(keys), args.runs, rng, max_days=args.max_days)
+                results = simulate_when(own, len(keys), Sim(args.runs, rng, args.max_days))
                 e["current_pace"] = {f"p{p}": when_date(start, percentile(results, p)) for p in PERCENTILES}
                 if deadline is not None:
                     e.setdefault("chance", {})["current_pace"] = chance(results, lambda r: r <= deadline)
@@ -557,7 +559,7 @@ def epics_data(con, args) -> dict:
                         e["current_pace"], keys, epic=epic,
                     )
             if any(team):
-                results = simulate_when(team, len(keys), args.runs, rng, max_days=args.max_days)
+                results = simulate_when(team, len(keys), Sim(args.runs, rng, args.max_days))
                 e["sole_focus"] = {f"p{p}": when_date(start, percentile(results, p)) for p in PERCENTILES}
                 if deadline is not None:
                     e.setdefault("chance", {})["sole_focus"] = chance(results, lambda r: r <= deadline)
@@ -575,14 +577,24 @@ def epics_data(con, args) -> dict:
                    WHERE scope = ? AND resolved BETWEEN ? AND ? AND coalesce(issue_type, '') <> 'Epic'""",
                 [args.scope, h_start, h_end],
             ).fetchone()[0]
-        results = simulate_priority(
-            team, [by_key[k]["open"] for k in order], args.runs, rng, share=share, wip=args.wip, max_days=args.max_days
-        )
-        for k, r in zip(order, results):
-            by_key[k]["priority"] = {f"p{p}": when_date(start, percentile(r, p)) for p in PERCENTILES}
-            if deadline is not None:
-                by_key[k].setdefault("chance", {})["priority"] = chance(r, lambda d: d <= deadline)
+        if not 0 <= share <= 1:
+            sys.exit(f"error: --epic-share must be between 0 and 1 (e.g. 0.5), got {share}")
+        if args.wip < 1:
+            sys.exit(f"error: --wip must be at least 1, got {args.wip}")
         priority = {"order": order, "wip": args.wip, "epic_share": round(share, 3)}
+        if share == 0:
+            priority["note"] = (
+                "no epic work was completed in the history window, so there is no capacity to plan with; "
+                "pass --epic-share to say how much of the team's time epics will get"
+            )
+        else:
+            results = simulate_priority(
+                team, [by_key[k]["open"] for k in order], Sim(args.runs, rng, args.max_days), Plan(share, args.wip)
+            )
+            for k, r in zip(order, results, strict=True):
+                by_key[k]["priority"] = {f"p{p}": when_date(start, percentile(r, p)) for p in PERCENTILES}
+                if deadline is not None:
+                    by_key[k].setdefault("chance", {})["priority"] = chance(r, lambda d: d <= deadline)
 
     out = {
         "scope": args.scope,
@@ -642,7 +654,9 @@ def cmd_epics(con, args) -> None:
     if stale := [e["epic"] for e in epics if e["status"] == "done" and e["open"]]:
         print(f"Epics marked done but with open children: {', '.join(stale)}")
     print("current pace = resampling the epic's own completions; sole focus = whole team on this epic only.")
-    if priority:
+    if priority and priority.get("note"):
+        print(f"priority: can't forecast the plan: {priority['note']}")
+    elif priority:
         print(
             f"priority = epics worked in the order above, {args.wip} at a time, with {priority['epic_share']:.0%} "
             "of team throughput going to epic work; unlisted epics paused."
