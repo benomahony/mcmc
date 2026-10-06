@@ -12,6 +12,7 @@ Subcommands:
   epics SCOPE            per-epic forecasts: at current pace, and if it had the team's sole focus
   calibrate [SCOPE]      score past forecasts against what actually happened
   stats SCOPE            weekly throughput/arrivals, lead time, backlog snapshots
+  aging SCOPE            open items older than their type's usual lead time
 
 DB: --db, else $MCMC_DB, else $CLAUDE_PLUGIN_DATA/mcmc.duckdb, else
 ~/.local/share/mcmc/mcmc.duckdb.
@@ -63,6 +64,7 @@ CREATE TABLE IF NOT EXISTS issues (
     done BOOLEAN,
     synced_at TIMESTAMP,
     epic TEXT,
+    status_category TEXT,   -- 'to_do' | 'in_progress' | 'done'
     PRIMARY KEY (scope, key)
 );
 CREATE TABLE IF NOT EXISTS snapshots (
@@ -90,6 +92,7 @@ CREATE TABLE IF NOT EXISTS forecasts (
 CREATE TABLE IF NOT EXISTS forecast_items (forecast_id INTEGER, key TEXT);
 -- Columns added after the first release; no-ops on fresh DBs.
 ALTER TABLE issues ADD COLUMN IF NOT EXISTS epic TEXT;
+ALTER TABLE issues ADD COLUMN IF NOT EXISTS status_category TEXT;
 ALTER TABLE forecasts ADD COLUMN IF NOT EXISTS epic TEXT;
 """
 
@@ -126,6 +129,14 @@ def _day(value) -> date | None:
     return datetime.fromisoformat(str(value).strip().replace("Z", "+00:00")[:10]).date()
 
 
+# Jira status category keys (new/indeterminate/done) and display names.
+_CATEGORIES = {
+    "new": "to_do", "to do": "to_do", "todo": "to_do",
+    "indeterminate": "in_progress", "in progress": "in_progress",
+    "done": "done", "complete": "done",
+}
+
+
 def _epic(issue: dict, epic_field: str | None) -> str | None:
     """Epic key: flat `epic` column, Data Center Epic Link custom field, or Cloud `parent`."""
     value = _field(issue, *([epic_field] if epic_field else []), "epic", "epic_link", "epic_key", "parent")
@@ -148,10 +159,11 @@ def normalise(issue: dict, epic_field: str | None = None) -> dict:
         category = status.get("statusCategory") or status.get("category")
     if isinstance(category, dict):
         category = category.get("key") or category.get("name")
+    category = _CATEGORIES.get(str(category).strip().lower().replace("_", " ")) if category else None
     resolved = _day(_field(issue, "resolved", "resolutiondate", "resolution_date"))
     done = _field(issue, "done")
     if done is None:
-        done = resolved is not None or str(category).lower() == "done"
+        done = resolved is not None or category == "done"
     return {
         "key": issue["key"],
         "issue_type": issue_type,
@@ -160,6 +172,7 @@ def normalise(issue: dict, epic_field: str | None = None) -> dict:
         "done": str(done).lower() not in ("false", "0", "") if isinstance(done, str) else bool(done),
         "subtask": subtask,
         "epic": _epic(issue, epic_field),
+        "status_category": "done" if done else category,
     }
 
 
@@ -206,10 +219,12 @@ def cmd_ingest(con, args) -> None:
         con.execute("UPDATE scopes SET jql = ? WHERE name = ?", [args.jql, args.scope])
     if issues:
         con.executemany(
-            "INSERT OR REPLACE INTO issues (scope, key, issue_type, created, resolved, done, synced_at, epic) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO issues "
+            "(scope, key, issue_type, created, resolved, done, synced_at, epic, status_category) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
-                [args.scope, i["key"], i["issue_type"], i["created"], i["resolved"], i["done"], now, i["epic"]]
+                [args.scope, i["key"], i["issue_type"], i["created"], i["resolved"], i["done"], now, i["epic"],
+                 i["status_category"]]
                 for i in issues
             ],
         )
@@ -695,6 +710,76 @@ def cmd_stats(con, args) -> None:
             print(f"  {s['taken_at'][:16]}  {s['open']:>5} / {s['done']}")
 
 
+# --- aging ------------------------------------------------------------------
+
+MIN_TYPE_SAMPLE = 10
+
+
+def cmd_aging(con, args) -> None:
+    """Open items whose age already exceeds what most completed items of their type took."""
+    h_start, h_end = history_window(con, args.scope, args.window, None)
+    lead = con.execute(
+        """SELECT issue_type, list(resolved - created ORDER BY resolved - created) FROM issues
+           WHERE scope = ? AND resolved BETWEEN ? AND ? AND created IS NOT NULL
+             AND coalesce(issue_type, '') <> 'Epic'
+           GROUP BY ALL""",
+        [args.scope, h_start, h_end],
+    ).fetchall()
+    by_type = {t: v for t, v in lead}
+    overall = sorted(d for v in by_type.values() for d in v)
+    if not overall:
+        sys.exit("error: no completed items in the window to compare against")
+    items = con.execute(
+        """SELECT key, issue_type, epic, coalesce(status_category, 'unknown'), ? - created AS age FROM issues
+           WHERE scope = ? AND NOT done AND created IS NOT NULL AND coalesce(issue_type, '') <> 'Epic'
+           ORDER BY age DESC, key""",
+        [h_end, args.scope],
+    ).fetchall()
+    rows = []
+    for key, itype, epic, category, age in items:
+        sample = by_type.get(itype) or []
+        basis = itype if len(sample) >= MIN_TYPE_SAMPLE else "all types"
+        sample = sample if basis == itype else overall
+        older_than = sum(d < age for d in sample) / len(sample)
+        p85, p95 = percentile(sample, 85), percentile(sample, 95)
+        risk = "stale" if age > p95 else "at risk" if age > p85 else "ok"
+        rows.append(
+            {"key": key, "type": itype, "epic": epic, "status": category, "age_days": age,
+             "older_than_pct_of_completed": round(older_than * 100), "lead_time_p85": p85, "lead_time_p95": p95,
+             "basis": basis, "risk": risk}
+        )
+    flagged = [r for r in rows if r["risk"] != "ok"]
+    out = {
+        "scope": args.scope,
+        "as_of": h_end.isoformat(),
+        "window": [h_start.isoformat(), h_end.isoformat()],
+        "open": len(rows),
+        "at_risk": sum(r["risk"] == "at risk" for r in rows),
+        "stale": sum(r["risk"] == "stale" for r in rows),
+        "items": rows if args.all else flagged,
+    }
+    if args.json:
+        print(json.dumps(out, indent=2, default=str))
+        return
+    print(
+        f"Scope {args.scope}, as of {h_end}: {out['open']} open, {out['stale']} stale (older than p95 lead time), "
+        f"{out['at_risk']} at risk (older than p85)\n"
+    )
+    if not out["items"]:
+        print("Nothing older than its type's p85 lead time.")
+        return
+    print(f"{'key':<10} {'type':<12} {'status':<11} {'epic':<9} {'age':>4}  {'p85/p95':>8}  older than   risk")
+    for r in out["items"]:
+        basis = "" if r["basis"] == r["type"] else "*"
+        print(
+            f"{r['key']:<10} {(r['type'] or '?')[:12]:<12} {r['status']:<11} {r['epic'] or '-':<9} {r['age_days']:>4}  "
+            f"{r['lead_time_p85']:>3}/{r['lead_time_p95']:<4}{basis:1}  {r['older_than_pct_of_completed']:>5}%      {r['risk']}"
+        )
+    if any(r["basis"] == "all types" for r in out["items"]):
+        print(f"\n* fewer than {MIN_TYPE_SAMPLE} completions of this type in the window; compared against all types")
+    print("age and lead time in days since creation; 'older than' = share of recently completed items it has outlived")
+
+
 # --- cli --------------------------------------------------------------------
 
 
@@ -751,6 +836,12 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("scope", nargs="?")
     p.add_argument("--json", action="store_true")
 
+    p = sub.add_parser("aging", help="open items older than their type's usual lead time")
+    p.add_argument("scope")
+    p.add_argument("--window", type=int, default=90)
+    p.add_argument("--all", action="store_true", help="list every open item, not just flagged ones")
+    p.add_argument("--json", action="store_true")
+
     p = sub.add_parser("stats", help="weekly throughput, lead time by type, backlog snapshots")
     p.add_argument("scope")
     p.add_argument("--window", type=int, default=90)
@@ -767,6 +858,7 @@ def main(argv: list[str] | None = None) -> None:
             "epics": cmd_epics,
             "calibrate": cmd_calibrate,
             "stats": cmd_stats,
+            "aging": cmd_aging,
         }[args.cmd](con, args)
     finally:
         con.close()

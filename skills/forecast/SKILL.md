@@ -1,6 +1,6 @@
 ---
 name: forecast
-description: Monte Carlo delivery forecast from Jira history. Use when the user asks "when will this epic/project/backlog be done?", "when will each epic land?", "how many items can we finish by <date>?", wants a probabilistic/throughput-based forecast, throughput or lead-time stats, or wants to check how accurate past forecasts were, for a Jira project, epic, board, or JQL filter.
+description: Monte Carlo delivery forecast from Jira history. Use when the user asks "when will this epic/project/backlog be done?", "when will each epic land?", "what work is stuck or ageing?", "how many items can we finish by <date>?", wants a probabilistic/throughput-based forecast, throughput or lead-time stats, or wants to check how accurate past forecasts were, for a Jira project, epic, board, or JQL filter.
 ---
 
 # Jira Monte Carlo forecast
@@ -78,6 +78,7 @@ uv run "$M" forecast <scope> --by 2026-12-18          # how many by a date?
 uv run "$M" epics <scope> [--epic PAY-123]...         # when will each open epic be done?
 uv run "$M" epics <scope> --order PAY-98,PAY-123 [--wip 2]   # ...if worked in this priority order
 uv run "$M" stats <scope>                             # weekly throughput/arrivals, lead time by type, snapshots
+uv run "$M" aging <scope> [--all]                     # open items older than their type's p85/p95 lead time
 uv run "$M" calibrate [<scope>]                       # how past forecasts held up
 ```
 
@@ -108,5 +109,10 @@ Add `--json` to post-process.
   Call out epics marked done that still have open children — the epic status is wrong or
   the children belong elsewhere.
 - For *how many*, higher confidence means a **lower** number ("85% likely to finish at least N").
+- For aging, lead with counts (stale = older than p95 lead time, at risk = older than p85),
+  then the oldest in-progress items first — those are most likely stuck; old to-do items are
+  usually deprioritised, not stuck. Lead time runs from creation, and only finished items
+  set the baseline, so frame flags as "older than nearly everything we finish", not "late".
+  Suggest closing or re-scoping stale to-do items: they inflate every backlog forecast.
 - If `calibrate` has resolved forecasts for this scope, add one line on track record
   (e.g. "past p85 answers held 7/9 times").

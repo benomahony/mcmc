@@ -47,10 +47,10 @@ def set_last_sync(db, when: date):
 def test_normalise_accepts_jira_and_flat_shapes():
     assert mcmc.normalise(jira_issue("A-1", "2026-07-01", "2026-07-05")) == {
         "key": "A-1", "issue_type": "Story", "created": date(2026, 7, 1), "resolved": date(2026, 7, 5), "done": True,
-        "subtask": False, "epic": None,
+        "subtask": False, "epic": None, "status_category": "done",
     }
     flat = mcmc.normalise({"key": "A-2", "type": "Bug", "created": "2026-07-01", "status_category": "In Progress"})
-    assert flat["done"] is False and flat["issue_type"] == "Bug"
+    assert flat["done"] is False and flat["issue_type"] == "Bug" and flat["status_category"] == "in_progress"
 
 
 def test_ingest_csv_drops_subtasks(db, capsys, tmp_path):
@@ -203,3 +203,30 @@ def test_epics_forecast_current_pace_vs_sole_focus(db, capsys, tmp_path):
 
     cal = json.loads(run(db, capsys, "calibrate", "--json"))
     assert "epic/current_pace" in cal["summary"]
+
+
+def test_aging_flags_items_older_than_their_type_lead_time(db, capsys, tmp_path):
+    end = START + timedelta(89)
+    rows = ["key,type,created,resolved,status_category"]
+    # 20 Stories that each took 1..20 days; only 3 Bugs (too few, so Bugs compare against all types).
+    rows += [f"S-{i},Story,{end - timedelta(i + 1)},{end - timedelta(1)},Done" for i in range(1, 21)]
+    rows += [f"B-{i},Bug,{end - timedelta(3)},{end - timedelta(2)},Done" for i in range(3)]
+    rows += [
+        f"O-1,Story,{end - timedelta(5)},,In Progress",   # young: ok
+        f"O-2,Story,{end - timedelta(19)},,In Progress",  # > p85 (18) but not > p95 (20): at risk
+        f"O-3,Story,{end - timedelta(60)},,To Do",        # way past p95: stale
+        f"O-4,Bug,{end - timedelta(40)},,In Progress",    # all-types basis
+    ]
+    path = tmp_path / "a.csv"
+    path.write_text("\n".join(rows))
+    run(db, capsys, "ingest", "PAY", str(path), "--full")
+    set_last_sync(db, end)
+
+    out = json.loads(run(db, capsys, "aging", "PAY", "--json"))
+    assert (out["open"], out["stale"], out["at_risk"]) == (4, 2, 1)
+    risk = {r["key"]: r for r in out["items"]}
+    assert set(risk) == {"O-2", "O-3", "O-4"}
+    assert (risk["O-3"]["risk"], risk["O-3"]["status"], risk["O-3"]["older_than_pct_of_completed"]) == ("stale", "to_do", 100)
+    assert risk["O-2"]["risk"] == "at risk"
+    assert risk["O-4"]["basis"] == "all types"
+    assert len(json.loads(run(db, capsys, "aging", "PAY", "--all", "--json"))["items"]) == 4
