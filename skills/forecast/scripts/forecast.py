@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import sys
 from collections import Counter
@@ -36,20 +37,36 @@ def daily_throughput(dates: list[date], start: date, end: date) -> list[int]:
     return [counts[start + timedelta(days=i)] for i in range((end - start).days + 1)]
 
 
-def percentile(sorted_values: list[int], p: int) -> int:
+def percentile(sorted_values: list[float], p: int) -> float:
     return sorted_values[min(len(sorted_values) - 1, int(len(sorted_values) * p / 100))]
 
 
-def simulate_when(history: list[int], items: int, runs: int, rng: random.Random) -> list[int]:
+def simulate_when(
+    history: list[int],
+    items: int,
+    runs: int,
+    rng: random.Random,
+    arrivals: list[int] | None = None,
+    max_days: int = 3650,
+) -> list[float]:
+    """Days until `items` are done; math.inf for runs that don't finish within max_days.
+
+    With `arrivals` (daily new-item counts aligned with `history`), each simulated day
+    samples one historical day and applies both its throughput and its arrivals.
+    """
     if not any(history):
         sys.exit("error: no completions in the history window, cannot forecast")
-    results = []
+    if arrivals is not None and len(arrivals) != len(history):
+        raise ValueError("arrivals must align with history")
+    days_idx = range(len(history))
+    results: list[float] = []
     for _ in range(runs):
-        done = days = 0
-        while done < items:
-            done += rng.choice(history)
+        remaining, days = items, 0
+        while remaining > 0 and days < max_days:
+            i = rng.choice(days_idx)
+            remaining -= history[i] - (arrivals[i] if arrivals else 0)
             days += 1
-        results.append(days)
+        results.append(days if remaining <= 0 else math.inf)
     return sorted(results)
 
 
@@ -57,7 +74,10 @@ def simulate_how_many(history: list[int], days: int, runs: int, rng: random.Rand
     return sorted(sum(rng.choices(history, k=days)) for _ in range(runs))
 
 
-def histogram(values: list[int], bins: int = 15, width: int = 40) -> str:
+def histogram(values: list[float], bins: int = 15, width: int = 40) -> str:
+    values = [v for v in values if v != math.inf]
+    if not values:
+        return "(no runs finished)"
     lo, hi = values[0], values[-1]
     step = max(1, -(-(hi - lo + 1) // bins))
     counts = Counter((v - lo) // step for v in values)
@@ -66,6 +86,10 @@ def histogram(values: list[int], bins: int = 15, width: int = 40) -> str:
         f"{lo + b * step:>6} | {'#' * round(counts[b] / peak * width)} {counts[b]}"
         for b in range(max(counts) + 1)
     )
+
+
+def when_date(start: date, days: float) -> str | None:
+    return None if days == math.inf else (start + timedelta(days=int(days))).isoformat()
 
 
 def main() -> None:
@@ -107,7 +131,7 @@ def main() -> None:
         results = simulate_when(history, args.items, args.runs, rng)
         summary["question"] = f"When will {args.items} items be done (starting {args.start})?"
         summary["percentiles"] = {
-            f"p{p}": (args.start + timedelta(days=percentile(results, p))).isoformat() for p in PERCENTILES
+            f"p{p}": when_date(args.start, percentile(results, p)) for p in PERCENTILES
         }
         label = "days"
     else:
@@ -129,7 +153,7 @@ def main() -> None:
     print(f"History: {h['items']} items over {h['days']} days ({h['start']} → {h['end']}), {h['items_per_week']}/week")
     print(f"Runs: {args.runs}\n")
     for k, v in summary["percentiles"].items():
-        print(f"  {k[1:]}% confidence: {v}")
+        print(f"  {k[1:]}% confidence: {'not within simulation limit' if v is None else v}")
     print(f"\nDistribution ({label}):\n{histogram(results)}")
 
 

@@ -1,62 +1,102 @@
 ---
 name: forecast
-description: Monte Carlo delivery forecast from Jira history. Use when the user asks "when will this epic/project/backlog be done?", "how many items can we finish by <date>?", or wants a probabilistic/throughput-based forecast for a Jira project, epic, board, or JQL filter.
+description: Monte Carlo delivery forecast from Jira history. Use when the user asks "when will this epic/project/backlog be done?", "when will each epic land?", "how many items can we finish by <date>?", wants a probabilistic/throughput-based forecast, throughput or lead-time stats, or wants to check how accurate past forecasts were, for a Jira project, epic, board, or JQL filter.
 ---
 
 # Jira Monte Carlo forecast
 
-Forecast from **historical throughput** (completed items per day), not estimates. The
-bundled script resamples past daily throughput 10,000 times to give percentile answers.
+Forecast from **historical throughput** (completed items per day), not estimates. History is
+kept in a local DuckDB, so repeat runs only fetch what changed, the backlog is snapshotted on
+every sync, and every forecast is recorded for later calibration.
+
+The CLI (needs `uv`; `--help` on any subcommand lists flags):
+
+```bash
+M="${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/mcmc.py"
+```
 
 ## 1. Pin down the question
 
 Get (ask only for what is missing):
 
-- **Scope** – a project key, epic, board, or raw JQL.
-- **Question** – either *when* will the remaining items be done, or *how many* by a date.
-- **History window** – default the last 90 days. Shorter (30–60d) if the team changed recently.
+- **Scope** – a project key, epic, board, or raw JQL. Give it a short stable **scope name**
+  (e.g. `PAY`, `PAY-123-epic`) — the same name must be reused on later runs.
+- **Question** – *when* will the remaining items be done, *how many* by a date, stats, or
+  calibration ("how good were our forecasts?").
+- **Issue types** – default: everything except sub-tasks. Use `--type` to forecast e.g. only Stories.
+- **History window** – default 90 days. Shorter (30–60d) if the team changed recently.
 
-## 2. Pull data with the Jira MCP
-
-Use whichever Jira MCP is connected. With the bundled Atlassian MCP:
-
-1. `getAccessibleAtlassianResources` → `cloudId`.
-2. `searchJiraIssuesUsingJql` for **completed** items, requesting only the `resolutiondate` field:
-   ```
-   project = KEY AND statusCategory = Done AND resolved >= -90d ORDER BY resolved ASC
-   ```
-   Page through **all** results (`maxResults` / `nextPageToken` or `startAt`) — a truncated
-   history silently understates throughput.
-3. For a *when* question, count **remaining** items in scope:
-   ```
-   <scope JQL> AND statusCategory != Done
-   ```
-
-Keep issue types consistent between history and remaining (e.g. exclude sub-tasks from both:
-`AND issuetype not in subTaskIssueTypes()`). If an issue lacks `resolutiondate`, skip it.
-
-## 3. Run the simulation
-
-Write the resolution dates, one per line, to a scratch file and run:
+## 2. Sync from Jira
 
 ```bash
-# When will 42 remaining items be done?
-python3 "${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/forecast.py" dates.txt \
-  --items 42 --history-start <90 days ago>
-
-# How many items by a date?
-python3 "${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/forecast.py" dates.txt \
-  --by 2026-12-18 --history-start <90 days ago>
+uv run "$M" sync-info <scope>
 ```
 
-Always pass `--history-start` equal to the JQL window start so leading zero-throughput days
-are counted. Add `--json` if you need to post-process. `--help` lists all flags.
+returns `mode` (`full` or `incremental`), `updated_since`, and the stored `jql`. Then query
+with whichever Jira MCP is connected (Atlassian MCP: `getAccessibleAtlassianResources` →
+`cloudId`, then `searchJiraIssuesUsingJql`):
+
+- **full** (first run, or weekly): `<scope JQL> AND issuetype not in subTaskIssueTypes() AND (statusCategory != Done OR resolved >= -<window>d)`
+- **incremental**: `<scope JQL> AND issuetype not in subTaskIssueTypes() AND updated >= "<updated_since>"`
+
+Request only the fields `issuetype,created,resolutiondate,status` plus the **epic link**:
+`parent` on Jira Cloud, or the "Epic Link" custom field on Server/Data Center (find its id,
+e.g. `customfield_10008`, via the MCP's field search). Page through **all**
+results (`nextPageToken` / `startAt` / `start_at`) — a truncated pull silently understates
+throughput or backlog. Write what you fetched to a scratch file as CSV — one row per issue,
+dates as `YYYY-MM-DD`, `resolved` empty when unresolved, `status_category` as Jira reports
+it (`Done`, `In Progress`, `To Do`):
+
+```csv
+key,type,created,resolved,status_category,epic
+PAY-105,Story,2026-06-15,2026-09-14,Done,PAY-98
+PAY-10,Story,2026-08-14,,In Progress,
+```
+
+`epic` is the parent epic's key (empty if none).
+
+(Raw Jira JSON issues also work; pass `--epic-field customfield_NNNNN` for a DC Epic Link.)
+Sub-tasks are dropped automatically. Epic links only arrive with a **full** sync for issues
+that haven't changed, so if `epics` reports none, do a full sync. Then:
+
+```bash
+uv run "$M" ingest <scope> issues.csv --jql '<scope JQL>' [--full]
+```
+
+Pass `--full` only for a full pull: open items missing from it are treated as having left the scope.
+
+## 3. Forecast
+
+```bash
+uv run "$M" forecast <scope> [--type Story]...        # when will the open backlog be done?
+uv run "$M" forecast <scope> --items 42               # when will N items be done?
+uv run "$M" forecast <scope> --by 2026-12-18          # how many by a date?
+uv run "$M" epics <scope> [--epic PAY-123]...         # when will each open epic be done?
+uv run "$M" stats <scope>                             # weekly throughput/arrivals, lead time by type, snapshots
+uv run "$M" calibrate [<scope>]                       # how past forecasts held up
+```
+
+`forecast` defaults the remaining count to open items in the DB, and for *when* questions
+runs two models: **no_growth** (fixed backlog) and **scope_growth** (each simulated day also
+adds that historical day's created items). Epic issues are containers and never count as
+items. `epics` gives two answers per epic: **current pace** (resampling that epic's own
+completions — realistic, and recorded for calibration) and **sole focus** (whole-team
+throughput on only that epic — the best case). Add `--json` to post-process.
 
 ## 4. Report
 
-- Lead with the **85% confidence** answer; show 50/70/85/95 in a small table.
-- State the inputs: scope JQL, history window, items completed, avg/week, remaining count.
-- Caveats worth one line each when relevant: scope growth (remaining count will rise —
-  suggest re-running weekly or adding a split-rate buffer), fewer than ~20 completions in
-  history (low confidence), and that items are assumed roughly similar in size.
+- Lead with the **85% confidence** answer; show 50/70/85/95 in a small table, both models
+  side by side for *when* questions. Explain that scope_growth is the realistic one when work
+  keeps being added (projects, living epics), no_growth when the scope is frozen.
+- State the inputs: scope JQL, history window, completed vs created per week, remaining count.
+- Relay any `warnings` (low history, backlog not shrinking). If scope_growth doesn't finish,
+  say plainly that at current rates the backlog never empties — that is the finding.
+- For epics, show one row per epic: open items, completions in the window, current-pace
+  p50/p85, sole-focus p85. "No progress" means nothing finished in the window, so there is no
+  pace to project — say so rather than guessing. A wide gap between current pace and sole
+  focus is the finding: the team's attention is spread thin; prioritising shortens it.
+  Call out epics marked done that still have open children — the epic status is wrong or
+  the children belong elsewhere.
 - For *how many*, higher confidence means a **lower** number ("85% likely to finish at least N").
+- If `calibrate` has resolved forecasts for this scope, add one line on track record
+  (e.g. "past p85 answers held 7/9 times").

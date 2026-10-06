@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "jira": {
+      "command": "uvx",
+      "args": ["mcp-atlassian"],
+      "env": {
+        "JIRA_URL": "http://localhost:8820",
+        "JIRA_PERSONAL_TOKEN": "mock",
+        "READ_ONLY_MODE": "true"
+      }
+    }
+  }
+}
