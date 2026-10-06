@@ -37,6 +37,11 @@ html, body { margin: 0; background: #f9f9f7; }
 .mc main { max-width: 960px; margin: 0 auto; }
 .mc h1 { font-size: 26px; font-weight: 600; margin: 0 0 4px; }
 .mc h2 { font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+.mc .chart-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin: 8px 0; }
+.mc .toggle { display: inline-flex; border: 1px solid var(--ring); border-radius: 8px; overflow: hidden; }
+.mc .toggle button { font: inherit; font-size: 13px; color: var(--ink-2); background: transparent; border: 0; padding: 5px 12px; cursor: pointer; }
+.mc .toggle button[aria-pressed="true"] { background: var(--grid); color: var(--ink); font-weight: 600; }
+.mc svg[data-xhair]:focus-visible { outline: 2px solid var(--s1); outline-offset: 4px; border-radius: 4px; }
 .mc .sub { color: var(--ink-2); margin: 0 0 24px; }
 .mc .lede { color: var(--ink-2); margin: 0 0 16px; max-width: 70ch; }
 .mc section { background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; padding: 20px; margin: 0 0 20px; }
@@ -83,8 +88,7 @@ html, body { margin: 0; background: #f9f9f7; }
 JS = """
 (() => {
   const tip = document.getElementById('tip');
-  const show = (el, x, y) => {
-    const rows = JSON.parse(el.dataset.tip);
+  const showRows = (rows, x, y) => {
     tip.replaceChildren();
     const title = document.createElement('div'); title.className = 't'; title.textContent = rows[0]; tip.append(title);
     for (const [value, label, color] of rows.slice(1)) {
@@ -99,10 +103,60 @@ JS = """
     tip.style.left = Math.min(x + 14, innerWidth - w - 8) + 'px';
     tip.style.top = Math.max(8, y - h - 12) + 'px';
   };
+  const show = (el, x, y) => showRows(JSON.parse(el.dataset.tip), x, y);
+  const hide = () => { tip.style.display = 'none'; };
+  const fmtDate = (iso, add) => {
+    const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + add);
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  };
+  // Continuous charts: a crosshair snaps to the nearest day; arrow keys step (shift = a week).
+  document.querySelectorAll('svg[data-xhair]').forEach(svg => {
+    const d = JSON.parse(svg.dataset.xhair);
+    const line = svg.querySelector('.xline');
+    let idx = null;
+    const render = (i, cx, cy) => {
+      idx = Math.max(0, Math.min(d.n - 1, i));
+      const x = d.l + (d.n > 1 ? d.pw * idx / (d.n - 1) : 0);
+      line.setAttribute('x1', x); line.setAttribute('x2', x); line.style.opacity = 1;
+      const rows = [fmtDate(d.start, d.offset + idx)];
+      for (const [label, color, values] of d.series) {
+        const v = values[idx];
+        rows[rows.length] = [(v * 100).toFixed(v > 0.005 && v < 0.995 ? 0 : 1) + '%', label, color];
+      }
+      showRows(rows, cx, cy);
+    };
+    const toIndex = (cx, cy) => {
+      const pt = svg.createSVGPoint(); pt.x = cx; pt.y = cy;
+      const p = pt.matrixTransform(svg.getScreenCTM().inverse());
+      return Math.round((p.x - d.l) / d.pw * (d.n - 1));
+    };
+    svg.addEventListener('pointermove', e => render(toIndex(e.clientX, e.clientY), e.clientX, e.clientY));
+    svg.addEventListener('pointerleave', () => { line.style.opacity = 0; hide(); });
+    svg.addEventListener('focus', () => { const b = svg.getBoundingClientRect(); render(idx ?? Math.floor(d.n / 2), b.left + b.width / 2, b.top + 40); });
+    svg.addEventListener('blur', () => { line.style.opacity = 0; hide(); });
+    svg.addEventListener('keydown', e => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      const step = (e.shiftKey ? 7 : 1) * (e.key === 'ArrowLeft' ? -1 : 1);
+      const b = svg.getBoundingClientRect();
+      render((idx ?? 0) + step, b.left + b.width / 2, b.top + 40);
+    });
+  });
+  // View toggles (probability density by default, cumulative on request).
+  document.querySelectorAll('.toggle').forEach(group => {
+    const panes = group.parentElement.querySelectorAll('[data-pane]');
+    group.querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => {
+      group.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
+      panes.forEach(p => { p.hidden = p.dataset.pane !== btn.dataset.view; });
+    }));
+  });
   document.addEventListener('pointerover', e => { const el = e.target.closest('[data-tip]'); if (el) show(el, e.clientX, e.clientY); });
-  document.addEventListener('pointermove', e => { const el = e.target.closest('[data-tip]'); if (el) show(el, e.clientX, e.clientY); else tip.style.display = 'none'; });
+  document.addEventListener('pointermove', e => {
+    const el = e.target.closest('[data-tip]');
+    if (el) show(el, e.clientX, e.clientY); else if (!e.target.closest('svg[data-xhair]')) hide();
+  });
   document.addEventListener('focusin', e => { const el = e.target.closest('[data-tip]'); if (el) { const b = el.getBoundingClientRect(); show(el, b.right, b.top); } });
-  document.addEventListener('focusout', () => { tip.style.display = 'none'; });
+  document.addEventListener('focusout', e => { if (e.target.closest('[data-tip]')) hide(); });
 })();
 """
 
@@ -214,49 +268,164 @@ def weekly_chart(weekly: list[dict]) -> str:
     return legend + "".join(out) + tbl
 
 
-def finish_histogram(samples: list[float], start: date, percentiles: dict) -> str:
-    """Distribution of simulated finish dates (scope frozen), weekly bins, with p50/p85/p95 rules."""
-    finite = sorted(s for s in samples if s != math.inf)
-    if not finite:
+def cdf(samples: list[float], days: int) -> list[float]:
+    """P(done within d days) for d = 0..days; runs that never finish count as not done."""
+    counts = [0] * (days + 1)
+    for v in samples:
+        if v != math.inf and v <= days:
+            counts[int(v)] += 1
+    out, acc = [], 0
+    for c in counts:
+        acc += c
+        out.append(acc / len(samples))
+    return out
+
+
+def kde(samples: list[float], days: int) -> list[float]:
+    """Chance of finishing on each day 0..days: a Gaussian kernel density of the finished runs
+    (Silverman bandwidth, at least 1 day), scaled by the share of runs that finish at all."""
+    finite = [v for v in samples if v != math.inf]
+    if len(finite) < 2:
+        return [0.0] * (days + 1)
+    n = len(finite)
+    mean = sum(finite) / n
+    sd = math.sqrt(sum((v - mean) ** 2 for v in finite) / n)
+    bw = max(1.0, 1.06 * sd * n ** -0.2)
+    counts: dict[float, int] = {}
+    for v in finite:
+        counts[v] = counts.get(v, 0) + 1
+    norm = len(samples) * bw * math.sqrt(2 * math.pi)
+    reach = 4 * bw
+    return [
+        sum(c * math.exp(-0.5 * ((g - v) / bw) ** 2) for v, c in counts.items() if abs(g - v) <= reach) / norm
+        for g in range(days + 1)
+    ]
+
+
+def _xhair(l: float, pw: float, start: date, n: int, series: list) -> str:
+    import json
+
+    payload = {"l": l, "pw": pw, "start": start.isoformat(), "offset": 0, "n": n, "series": series}
+    return f' tabindex="0" data-xhair="{escape(json.dumps(payload), quote=True)}"'
+
+
+def _date_ticks(out: list, start: date, span: int, x, y_text: float) -> None:
+    step = next((s for s in (7, 14, 28, 56, 91, 182, 365) if span / s <= 7), 730)
+    d = (-start.weekday()) % 7 if step < 365 else 0  # weekly-ish ticks land on Mondays
+    while d <= span:
+        out.append(f'<text x="{x(d):.1f}" y="{y_text}" text-anchor="middle">{short_date(start + timedelta(days=d))}</text>')
+        d += step
+
+
+FINISH_MODELS = [("no_growth", "Finish date", "var(--s1)")]
+
+
+def finish_chart(samples: dict[str, list[float]], start: date, percentiles: dict, target: str | None, max_days: int) -> str:
+    """Finish-date distribution: probability density by default, cumulative chance behind a toggle.
+
+    Both views share the x axis and the hover readout (chance of being done by the hovered date).
+    """
+    models = [(k, lab, c) for k, lab, c in FINISH_MODELS if samples.get(k)]
+    if not models:
+        return '<p class="note">No simulation results.</p>'
+    frozen = sorted(v for v in samples[models[0][0]] if v != math.inf)
+    if not frozen:
         return '<p class="note">No simulated run finished within the limit.</p>'
-    lo, hi = int(finite[0]), int(finite[-1])
-    lo_w, bins = lo // 7, {}
-    for s in finite:
-        bins[int(s) // 7] = bins.get(int(s) // 7, 0) + 1
-    keys = list(range(lo_w, hi // 7 + 1))
-    l, r, t, b, h = 40, 16, 28, 28, 220
+    # Frame the frozen-scope distribution; a slower model runs off the right edge (its end label says how much).
+    ends = [frozen[min(len(frozen) - 1, int(len(frozen) * 0.995))] * 1.15]
+    if target:
+        ends.append((date.fromisoformat(target) - start).days * 1.05)
+    span = int(min(max_days, max(ends + [14])))
+    cum = {k: cdf(samples[k], span) for k, *_ in models}
+    dens = {k: kde(samples[k], span) for k, *_ in models}
+    readout = [["chance done by then", c, [round(v, 4) for v in cum[k]]] for k, lab, c in models]
+
+    l, r, t, b, h = 52, 110, 24, 28, 250
     pw, ph = W - l - r, h - t - b
-    slot = pw / len(keys)
-    bw = min(24, slot - 2)
-    top = max(bins.values())
-    y = lambda v: t + ph - ph * v / top  # noqa: E731
-    xday = lambda d: l + (d / 7 - lo_w) * slot  # noqa: E731
-    out = [f'<svg viewBox="0 0 {W} {h}" role="img" aria-label="Distribution of simulated finish dates">']
-    out.append(f'<line x1="{l}" x2="{l + pw}" y1="{t + ph}" y2="{t + ph}" stroke="var(--axis)" stroke-width="1"/>')
-    total = len(samples)
-    for i, k in enumerate(keys):
-        c = bins.get(k, 0)
-        wk = start + timedelta(days=k * 7)
-        x0 = l + i * slot + (slot - bw) / 2
-        hit = tip(f"Week of {fmt_date(wk)}", (f"{c / total:.1%}", "of runs finish this week", "var(--s1)"))
-        out.append(f'<g class="mark"{hit}><rect x="{l + i * slot:.1f}" y="{t}" width="{slot:.1f}" height="{ph}" fill="transparent"/>')
-        if c:
-            out.append(f'<path d="{column(x0, y(c), bw, t + ph)}" fill="var(--s1)"/>')
-        out.append("</g>")
-    every = max(1, round(len(keys) / 7))
-    for i, k in enumerate(keys):
-        if i % every == 0:
-            out.append(f'<text x="{l + i * slot + slot / 2:.1f}" y="{h - 8}" text-anchor="middle">{short_date(start + timedelta(days=k * 7))}</text>')
+    x = lambda d: l + pw * d / span  # noqa: E731
+
+    def frame(aria: str, top: float, y_ticks: list[tuple[float, str]]) -> list[str]:
+        out = [f'<svg viewBox="0 0 {W} {h}" role="img" aria-label="{escape(aria)}"{_xhair(l, pw, start, span + 1, readout)}>']
+        for v, lab in y_ticks:
+            yy = t + ph - ph * v / top
+            out.append(f'<line x1="{l}" x2="{l + pw}" y1="{yy:.1f}" y2="{yy:.1f}" stroke="var(--grid)" stroke-width="1"/>')
+            out.append(f'<text x="{l - 8}" y="{yy + 4:.1f}" text-anchor="end">{lab}</text>')
+        out.append(f'<line x1="{l}" x2="{l + pw}" y1="{t + ph}" y2="{t + ph}" stroke="var(--axis)" stroke-width="1"/>')
+        if target:
+            td = (date.fromisoformat(target) - start).days
+            if 0 <= td <= span:
+                out.append(f'<line x1="{x(td):.1f}" x2="{x(td):.1f}" y1="{t}" y2="{t + ph}" stroke="var(--ink-2)" stroke-width="1"/>')
+                out.append(f'<text class="ink" x="{x(td) + 6:.1f}" y="{t + 10}">target {short_date(date.fromisoformat(target))}</text>')
+        _date_ticks(out, start, span, x, h - 8)
+        return out
+
+    def finish(out: list[str], end_labels: list[tuple[float, str]]) -> str:
+        if len(end_labels) < 2 or abs(end_labels[0][0] - end_labels[1][0]) >= 16:
+            for ly, text in end_labels:
+                out.append(f'<text class="ink" x="{x(span) + 10:.1f}" y="{ly + 4:.1f}">{escape(text)}</text>')
+        out.append(f'<line class="xline" x1="0" x2="0" y1="{t}" y2="{t + ph}" stroke="var(--axis)" stroke-width="1" style="opacity:0"/>')
+        out.append("</svg>")
+        return "".join(out)
+
+    # Probability density: chance of finishing on each day, in % per day.
+    top_d, step_d = nice_max(max(max(v) for v in dens.values()) * 100 * 1.1)
+    yd = lambda v: t + ph - ph * v * 100 / top_d  # noqa: E731
+    ticks, v = [], 0.0
+    while v <= top_d + 1e-9:
+        ticks.append((v, f"{v:g}%"))
+        v += step_d
+    pdf = frame("Probability of finishing on each date", top_d, ticks)
+    for k, lab, c in models:
+        pts = " ".join(f"{x(d):.1f},{yd(p):.1f}" for d, p in enumerate(dens[k]))
+        pdf.append(f'<polygon points="{x(0):.1f},{t + ph} {pts} {x(span):.1f},{t + ph}" fill="{c}" fill-opacity="0.1"/>')
+        pdf.append(f'<polyline points="{pts}" fill="none" stroke="{c}" stroke-width="2" stroke-linejoin="round"/>')
     for p in ("p50", "p85", "p95"):
-        d = percentiles.get(p)
-        if not d:
-            continue
-        days = (date.fromisoformat(d) - start).days
-        px = xday(days + 0.5)
-        out.append(f'<line x1="{px:.1f}" x2="{px:.1f}" y1="{t - 6}" y2="{t + ph}" stroke="var(--ink-2)" stroke-width="1"/>')
-        out.append(f'<text class="ink" x="{px:.1f}" y="{t - 10}" text-anchor="middle">{p[1:]}%</text>')
-    out.append("</svg>")
-    return "".join(out)
+        if percentiles.get(p):
+            dd = (date.fromisoformat(percentiles[p]) - start).days
+            if 0 <= dd <= span:
+                py = yd(dens[models[0][0]][dd])
+                pdf.append(f'<line x1="{x(dd):.1f}" x2="{x(dd):.1f}" y1="{py:.1f}" y2="{t + ph}" stroke="var(--ink-2)" stroke-width="1"/>')
+                pdf.append(f'<text class="ink" x="{x(dd):.1f}" y="{py - 8:.1f}" text-anchor="middle">{p[1:]}%</text>')
+    pdf_svg = finish(pdf, [])
+
+    # Cumulative: chance of being done by each date.
+    cdf_out = frame("Chance of being done by each date", 1, [(v, f"{v:.0%}") for v in (0, 0.25, 0.5, 0.75, 1)])
+    labels = []
+    for k, lab, c in models:
+        pts = " ".join(f"{x(d):.1f},{t + ph - ph * v:.1f}" for d, v in enumerate(cum[k]))
+        cdf_out.append(f'<polyline points="{pts}" fill="none" stroke="{c}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>')
+        end = cum[k][-1]
+        cdf_out.append(f'<circle cx="{x(span):.1f}" cy="{t + ph - ph * end:.1f}" r="4" fill="{c}" stroke="var(--surface)" stroke-width="2"/>')
+        if len(models) > 1:
+            labels.append((t + ph - ph * end, f"{lab} {end:.0%}"))
+    cdf_svg = finish(cdf_out, labels)
+
+    legend = "<div></div>" if len(models) == 1 else '<div class="legend">' + "".join(
+        f'<span><i class="key-line" style="background:{c}"></i>{escape(lab)}</span>' for _, lab, c in models
+    ) + "</div>"
+    toggle = (
+        '<div class="toggle" role="group" aria-label="Chart view">'
+        '<button type="button" data-view="pdf" aria-pressed="true">Probability</button>'
+        '<button type="button" data-view="cdf" aria-pressed="false">Cumulative</button></div>'
+    )
+    weekly = [
+        [fmt_date(start + timedelta(days=d))] + [f"{cum[k][d]:.0%}" for k, *_ in models]
+        for d in range(7, span + 1, 7)
+    ]
+    tbl = data_table(["Date", "Chance done by then"], weekly,
+                     set(range(1, len(models) + 1)), "Show weekly chances")
+    edge = short_date(start + timedelta(days=span))
+    beyond = "".join(
+        f'<p class="note">{escape(lab)}: {cum[k][-1]:.0%} of runs finish by {edge}, '
+        + (f"{sum(v != math.inf for v in samples[k]) / len(samples[k]):.0%} within {max_days // 365} years.</p>"
+           if any(v == math.inf for v in samples[k]) else "the rest later.</p>")
+        for k, lab, _ in models
+        if cum[k][-1] < 0.99
+    )
+    return (
+        f'<div><div class="chart-head">{legend}{toggle}</div>'
+        f'<div data-pane="pdf">{pdf_svg}</div><div data-pane="cdf" hidden>{cdf_svg}</div>{beyond}{tbl}</div>'
+    )
 
 
 def epic_dots(epics: list[dict], start: date, has_priority: bool, max_days: int) -> str:
@@ -379,46 +548,46 @@ def render(d: dict) -> str:
     scope, fc, ep, ag, st, cal = d["scope"], d["forecast"], d["epics"], d["aging"], d["stats"], d["calibrate"]
     start = date.fromisoformat(fc["start"])
     h = fc["history"]
-    frozen, growth = fc["percentiles"].get("no_growth", {}), fc["percentiles"].get("scope_growth")
-    within = fc["finished_within_limit"]
+    frozen = fc["percentiles"].get("no_growth", {})
     max_days = fc["max_days"]
-    growth_85 = growth and growth["p85"]
 
     tiles = [
-        ("hero", "85% confidence, scope frozen", fmt_date(frozen.get("p85")), f"{fc['items']} open items, nothing added"),
-        ("", "85% confidence, new work keeps arriving",
-         fmt_date(growth_85) if growth_85 else "Not in sight",
-         (f"only {within['scope_growth']:.0%} of runs finish within {max_days // 365} years" if growth and not growth_85 else "at the historical intake rate")
-         if growth else "not modelled"),
+        ("hero", "85% confidence", fmt_date(frozen.get("p85")), f"{fc['items']} open items, if nothing new is added"),
         ("", "Completed per week", f"{h['completed_per_week']:g}", f"{h['completed']} in {h['days']} days"),
         ("", "Created per week", f"{h['created_per_week']:g}", f"{h['created']} in {h['days']} days"),
     ]
     if "chance" in fc:
-        tiles.insert(1, ("", f"Chance done by {fmt_date(fc['target_date'])}",
-                         pct(fc["chance"]["no_growth"]),
-                         f"{pct(fc['chance'].get('scope_growth'))} if new work keeps arriving" if "scope_growth" in fc["chance"] else ""))
+        tiles.insert(1, ("", f"Chance done by {fmt_date(fc['target_date'])}", pct(fc["chance"]["no_growth"]),
+                         "if nothing new is added"))
     tile_html = '<div class="tiles">' + "".join(
         f'<div class="tile {cls}"><div class="label">{escape(lab)}</div><div class="value">{escape(val)}</div>'
         f'<div class="note">{escape(note)}</div></div>'
         for cls, lab, val, note in tiles
     ) + "</div>"
 
-    warnings = "".join(f'<p class="warn">{escape(w)}</p>' for w in fc.get("warnings", []))
-    pct_rows = []
-    for p in (50, 70, 85, 95):
-        row = [f"{p}%", fmt_date(frozen.get(f"p{p}"))]
-        if growth:
-            row.append(fmt_date(growth[f"p{p}"]) if growth[f"p{p}"] else f"beyond {max_days} days")
-        pct_rows.append(row)
-    pct_head = ["Confidence", "Scope frozen"] + (["New work keeps arriving"] if growth else [])
+    done_wk, new_wk = h["completed_per_week"], h["created_per_week"]
+    notes = [w[0].upper() + w[1:] + "." for w in fc.get("warnings", [])]
+    if new_wk >= done_wk:
+        notes.append(
+            f"New work is being created as fast as it is finished ({new_wk:g} vs {done_wk:g} a week). These dates assume "
+            "nothing new is added; at the current rate the backlog won't shrink on its own."
+        )
+    elif new_wk >= 0.5 * done_wk:
+        notes.append(
+            f"New work is still arriving ({new_wk:g} a week vs {done_wk:g} finished). These dates cover today's "
+            "backlog only; anything added pushes them out."
+        )
+    warnings = "".join(f'<p class="warn">{escape(n)}</p>' for n in notes)
+    pct_rows = [[f"{p}%", fmt_date(frozen.get(f"p{p}"))] for p in (50, 70, 85, 95)]
+    pct_head = ["Confidence", "Done by"]
 
     sections = []
     sections.append(
         f"""<section><h2>When will the open backlog be done?</h2>
-<p class="lede">{fc['items']} open items (excluding epics and sub-tasks). Each simulated run replays randomly chosen days
-from the last {h['days']} days of history until the backlog is empty; the chart shows when the
-{fc['runs']:,} runs finish if nothing new is added.</p>{warnings}
-{finish_histogram(fc["_samples"].get("days (no_growth)", []), start, frozen)}
+<p class="lede">{fc['items']} open items (excluding epics and sub-tasks). Each of {fc['runs']:,} simulated runs replays randomly
+chosen days from the last {h['days']} days of history until the backlog is empty. The curve shows how likely each
+finish date is; hover it (or focus it and use the arrow keys) for the chance of being done by any date.</p>{warnings}
+{finish_chart({k.split("(")[1].rstrip(")"): v for k, v in fc["_samples"].items()}, start, frozen, fc.get("target_date"), max_days)}
 {table(pct_head, pct_rows)}</section>"""
     )
     sections.append(
@@ -513,7 +682,7 @@ old to-do items are usually deprioritised.</p>
 <title>{escape(scope)} delivery forecast</title><style>{CSS}</style></head>
 <body><div class="mc"><main>
 <h1>{escape(scope)} delivery forecast</h1>
-<p class="sub">As of {fmt_date(h['end'])} · history {fmt_date(h['start'])} – {fmt_date(h['end'])} · {fc['runs']:,} Monte Carlo runs per model</p>
+<p class="sub">As of {fmt_date(h['end'])} · history {fmt_date(h['start'])} – {fmt_date(h['end'])} · {fc['runs']:,} Monte Carlo runs</p>
 {tile_html}
 {"".join(sections)}
 <p class="note">Generated by mcmc. Forecasts resample historical daily throughput; they assume items are roughly similar

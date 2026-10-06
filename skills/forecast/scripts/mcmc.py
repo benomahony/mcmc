@@ -875,7 +875,7 @@ def cmd_report(con, args) -> None:
     data = {
         "scope": args.scope,
         "forecast": forecast_data(
-            con, argparse.Namespace(**common, type=None, by=None, items=None, at_least=None, no_scope_growth=False)
+            con, argparse.Namespace(**common, type=None, by=None, items=None, at_least=None, no_scope_growth=True)
         ),
         "epics": epics_data(
             con, argparse.Namespace(**common, epic=None, order=args.order, wip=args.wip, epic_share=args.epic_share)
