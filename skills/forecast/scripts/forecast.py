@@ -17,6 +17,7 @@ import math
 import random
 import sys
 from collections import Counter
+from collections.abc import Sequence
 from datetime import date, datetime, timedelta
 
 PERCENTILES = (50, 70, 85, 95)
@@ -37,7 +38,7 @@ def daily_throughput(dates: list[date], start: date, end: date) -> list[int]:
     return [counts[start + timedelta(days=i)] for i in range((end - start).days + 1)]
 
 
-def percentile(sorted_values: list[float], p: int) -> float:
+def percentile(sorted_values: Sequence[float], p: int) -> float:
     return sorted_values[min(len(sorted_values) - 1, int(len(sorted_values) * p / 100))]
 
 
@@ -115,7 +116,7 @@ def simulate_how_many(history: list[int], days: int, runs: int, rng: random.Rand
     return sorted(sum(rng.choices(history, k=days)) for _ in range(runs))
 
 
-def histogram(values: list[float], bins: int = 15, width: int = 40) -> str:
+def histogram(values: Sequence[float], bins: int = 15, width: int = 40) -> str:
     values = [v for v in values if v != math.inf]
     if not values:
         return "(no runs finished)"
@@ -125,7 +126,7 @@ def histogram(values: list[float], bins: int = 15, width: int = 40) -> str:
     peak = max(counts.values())
     return "\n".join(
         f"{lo + b * step:>6} | {'#' * round(counts[b] / peak * width)} {counts[b]}"
-        for b in range(max(counts) + 1)
+        for b in range(int(max(counts)) + 1)
     )
 
 

@@ -328,5 +328,5 @@ def test_failed_ingest_leaves_nothing_half_written(db, capsys, tmp_path):
         mcmc.ingest(con, "PAY", [bad], jql="project = OTHER", full=True, now=datetime(2026, 9, 1))
     assert con.execute("SELECT jql FROM scopes").fetchall() == [("project = PAY",)]
     assert con.execute("SELECT key FROM issues").fetchall() == [("PAY-1",)]
-    assert con.execute("SELECT count(*) FROM snapshots").fetchone()[0] == 1
+    assert con.execute("SELECT count(*) FROM snapshots").fetchall() == [(1,)]
     con.close()

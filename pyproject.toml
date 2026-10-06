@@ -7,7 +7,13 @@ requires-python = ">=3.12"
 dependencies = []
 
 [dependency-groups]
-dev = ["duckdb>=1.1", "httpx", "jira820>=0.12", "pytest>=8"]
+dev = ["duckdb>=1.1", "httpx", "jira820>=0.12", "pyright>=1.1.400", "pytest>=8", "ruff>=0.12"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.pyright]
+include = ["skills/forecast/scripts", "tests"]
+extraPaths = ["skills/forecast/scripts"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"

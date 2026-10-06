@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Collection
 from datetime import date, datetime, timedelta
 from html import escape
 
@@ -256,7 +257,7 @@ def nice_max(v: float) -> tuple[float, float]:
     return v, v / 4
 
 
-def table(head: list[str], rows: list[list[str]], num: set[int] = frozenset(), narrow_hide: set[int] = frozenset()) -> str:
+def table(head: list[str], rows: list[list[str]], num: Collection[int] = (), narrow_hide: Collection[int] = ()) -> str:
     def cls(i):
         return " ".join(c for c in ("num" if i in num else "", "hide-narrow" if i in narrow_hide else "") if c)
 
@@ -451,8 +452,9 @@ def weekly_chart(w: int, weeks: list[dict]) -> str:
             out.append(f'<circle cx="{x(i):.1f}" cy="{y(val):.1f}" r="3.5" fill="{color}" fill-opacity="0.35"/>')
         pts = " ".join(f"{x(i):.1f},{y(a):.1f}" for i, a in enumerate(avg) if a is not None)
         out.append(f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>')
-    if w >= WIDE and avg_done[-1] is not None:
-        ends = [(y(avg_done[-1]), f"Finished {per_week(avg_done[-1])}/wk"), (y(avg_new[-1]), f"Created {per_week(avg_new[-1])}/wk")]
+    last_done, last_new = avg_done[-1], avg_new[-1]
+    if w >= WIDE and last_done is not None and last_new is not None:
+        ends = [(y(last_done), f"Finished {per_week(last_done)}/wk"), (y(last_new), f"Created {per_week(last_new)}/wk")]
         if abs(ends[0][0] - ends[1][0]) >= 16:
             for ey, text in ends:
                 out.append(f'<text class="ink" x="{x(n - 1) + 10:.1f}" y="{ey + 4:.1f}">{text}</text>')
@@ -460,8 +462,9 @@ def weekly_chart(w: int, weeks: list[dict]) -> str:
     for i, wk in enumerate(weeks):
         x0, x1 = max(l, x(i) - band / 2), min(l + pw, x(i) + band / 2)
         rows = [(str(done[i]), "finished", "var(--done)"), (str(new[i]), "created", "var(--new)")]
-        if avg_done[i] is not None:
-            rows += [(per_week(avg_done[i]), "finished, 4-week average", "var(--done)"), (per_week(avg_new[i]), "created, 4-week average", "var(--new)")]
+        a_done, a_new = avg_done[i], avg_new[i]
+        if a_done is not None and a_new is not None:
+            rows += [(per_week(a_done), "finished, 4-week average", "var(--done)"), (per_week(a_new), "created, 4-week average", "var(--new)")]
         out.append(
             f'<g class="col"{tip(f"Week of {long_date(wk['week'])}", *rows)}><rect x="{x0:.1f}" y="{t}" width="{max(x1 - x0, 1):.1f}" height="{ph}" fill="transparent"/>'
             f'<line class="hair" x1="{x(i):.1f}" x2="{x(i):.1f}" y1="{t}" y2="{t + ph}" stroke="var(--axis)" stroke-width="1"/></g>'
@@ -828,7 +831,7 @@ finishes of that type. Filled dots (in progress) there are the likeliest to be s
               "how_many": "Items by a date", "epic/current_pace": "Epic finish date"}
     if resolved:
         rows = [
-            [escape(labels.get(m, m)), p[1:] + "%", f"{s['held'] / (s['held'] + s['missed']):.0%}", f"{s['held']} of {s['held'] + s['missed']}"]
+            [escape(labels.get(m, str(m))), p[1:] + "%", f"{s['held'] / (s['held'] + s['missed']):.0%}", f"{s['held']} of {s['held'] + s['missed']}"]
             for m, by_p in resolved.items() for p, s in by_p.items()
         ]
         sections.append(

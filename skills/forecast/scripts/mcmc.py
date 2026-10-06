@@ -30,6 +30,7 @@ import math
 import os
 import random
 import sys
+from collections.abc import Sequence
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -329,8 +330,9 @@ def history_window(con, scope: str, window: int, end: date | None) -> tuple[date
     if end is None:
         last = con.execute("SELECT last_sync FROM scopes WHERE name = ?", [scope]).fetchone()
         if not last or last[0] is None:
-            sys.exit(f"error: no data for scope {scope!r}; ingest first")
+            sys.exit(f"error: no data for scope {scope!r}; run `ingest {scope} <file>` first")
         end = last[0].date()
+    assert end is not None
     return end - timedelta(days=window - 1), end
 
 
@@ -377,7 +379,7 @@ def _record(con, scope, kind, growth, start, target, items, types, h_start, h_en
     return fid
 
 
-def chance(results: list[float], ok) -> float:
+def chance(results: Sequence[float], ok) -> float:
     return round(sum(map(ok, results)) / len(results), 3)
 
 
@@ -531,6 +533,7 @@ def epics_data(con, args) -> dict:
         for k, d in con.execute("SELECT key, done FROM issues WHERE scope = ? AND issue_type = 'Epic'", [args.scope]).fetchall()
     }
     deadline = target_days(start, args.target_date)
+    priority: dict | None = None
     epics = []
     for epic, keys in rows:
         keys = keys or []
@@ -588,7 +591,7 @@ def epics_data(con, args) -> dict:
         "epics": epics,
         "open_without_epic": unparented_open,
     }
-    if args.order:
+    if priority:
         out["priority"] = priority
     if deadline is not None:
         out["target_date"] = args.target_date.isoformat()
@@ -610,9 +613,10 @@ def cmd_epics(con, args) -> None:
         f"({h['team_completed']} team completions)\n"
     )
     head = f"{'epic':<12} {'status':<10} {'open':>4} {'done/window':>11}   {'current pace p50':>16} {'p85':>11}   {'sole focus p85':>14}"
-    models_shown = ["current_pace", "sole_focus"] + (["priority"] if args.order else [])
-    if args.order:
-        epics.sort(key=lambda e: priority["order"].index(e["epic"]) if e["epic"] in priority["order"] else 10**6)
+    models_shown = ["current_pace", "sole_focus"] + (["priority"] if priority else [])
+    if priority:
+        order = priority["order"]
+        epics.sort(key=lambda e: order.index(e["epic"]) if e["epic"] in order else 10**6)
         head += f"   {'priority p85':>12}"
     if deadline is not None:
         head += f"   chance by {args.target_date} ({'/'.join(m.split('_')[0] for m in models_shown)})"
@@ -638,7 +642,7 @@ def cmd_epics(con, args) -> None:
     if stale := [e["epic"] for e in epics if e["status"] == "done" and e["open"]]:
         print(f"Epics marked done but with open children: {', '.join(stale)}")
     print("current pace = resampling the epic's own completions; sole focus = whole team on this epic only.")
-    if args.order:
+    if priority:
         print(
             f"priority = epics worked in the order above, {args.wip} at a time, with {priority['epic_share']:.0%} "
             "of team throughput going to epic work; unlisted epics paused."
