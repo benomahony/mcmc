@@ -1,5 +1,6 @@
 import json
 from datetime import date, datetime, timedelta
+from pathlib import Path
 
 import duckdb
 import pytest
@@ -302,3 +303,28 @@ def test_report_is_self_contained_html_and_escapes_jira_text(db, capsys, tmp_pat
     assert "&lt;script&gt;" in html
     assert "http://" not in html and "https://" not in html  # no external requests
     assert "None" not in html and "nan" not in html
+
+
+def test_reports_are_kept_with_history_and_indexed(db, capsys, tmp_path, monkeypatch):
+    seed_steady(db, capsys, tmp_path)
+    times = iter([datetime(2026, 9, 1, 9, 0), datetime(2026, 9, 1, 9, 0, 5)])
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return next(times)
+
+    monkeypatch.setattr(mcmc, "datetime", Clock)
+    first = Path(run(db, capsys, "report", "PAY", "--runs", "200").strip())
+    second = Path(run(db, capsys, "report", "PAY", "--runs", "200").strip())
+    assert first != second and first.exists() and second.exists()  # same day, nothing overwritten
+    assert first.parent == db.parent / "reports" / "PAY"
+    assert first.name == "PAY-2026-09-01-090000.html"
+
+    listing = json.loads(run(db, capsys, "reports", "--json"))
+    assert [Path(r["path"]) for r in listing["reports"]] == [second, first]  # newest first
+    index = Path(listing["index"]).read_text()
+    assert 'href="PAY/PAY-2026-09-01-090005.html"' in index and "latest" in index
+
+    second.unlink()  # deleted files drop out of the listing
+    assert [Path(r["path"]) for r in json.loads(run(db, capsys, "reports", "--json"))["reports"]] == [first]

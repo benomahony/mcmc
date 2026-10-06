@@ -84,6 +84,7 @@ uv run "$M" epics <scope> --order PAY-98,PAY-123 [--wip 2]   # ...if worked in t
 uv run "$M" stats <scope>                             # weekly throughput/arrivals, lead time by type, snapshots
 uv run "$M" aging <scope> [--all]                     # open items older than their type's p85/p95 lead time
 uv run "$M" report <scope> [--order ...] [--target-date ...]  # everything above as one HTML page; prints its path
+uv run "$M" reports [<scope>]                         # saved reports, newest first, + the index page
 uv run "$M" calibrate [<scope>]                       # how past forecasts held up
 ```
 
@@ -125,7 +126,10 @@ Add `--json` to post-process.
   Suggest closing or re-scoping stale to-do items: they inflate every backlog forecast.
 - **HTML report**: when the user asks for a report, dashboard, or something to share — or
   after answering, offer it in one line — run `report` with the same `--order` /
-  `--target-date` you used, and give them the printed path (`open <path>` on macOS). The page
+  `--target-date` you used, and give them the printed path (`open <path>` on macOS). Every
+  report is kept (timestamped, never overwritten) under `reports/<scope>/` next to the DB, and
+  `reports/index.html` lists them all with their headline numbers — point the user there when
+  they ask for earlier reports or how the forecast has moved. The page
   is self-contained (no network), with light/dark themes, hover details and a table view of
   every chart. If your environment can publish HTML pages (e.g. an artifact tool), offer to
   publish it so it has a shareable link. Still give the headline in chat; the page supports

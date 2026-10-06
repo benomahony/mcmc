@@ -13,7 +13,8 @@ Subcommands:
   calibrate [SCOPE]      score past forecasts against what actually happened
   stats SCOPE            weekly throughput/arrivals, lead time, backlog snapshots
   aging SCOPE            open items older than their type's usual lead time
-  report SCOPE           all of the above as one self-contained HTML page
+  report SCOPE           all of the above as one self-contained HTML page, kept in reports/
+  reports [SCOPE]        list saved reports (newest first) and the index page
 
 DB: --db, else $MCMC_DB, else $CLAUDE_PLUGIN_DATA/mcmc.duckdb, else
 ~/.local/share/mcmc/mcmc.duckdb.
@@ -91,6 +92,17 @@ CREATE TABLE IF NOT EXISTS forecasts (
     epic TEXT               -- per-epic forecasts only
 );
 CREATE TABLE IF NOT EXISTS forecast_items (forecast_id INTEGER, key TEXT);
+CREATE TABLE IF NOT EXISTS reports (
+    scope TEXT,
+    created_at TIMESTAMP,
+    path TEXT,
+    as_of DATE,
+    open_items INTEGER,
+    p85 DATE,
+    shrinking BOOLEAN,
+    target_date DATE,
+    chance DOUBLE
+);
 -- Columns added after the first release; no-ops on fresh DBs.
 ALTER TABLE issues ADD COLUMN IF NOT EXISTS epic TEXT;
 ALTER TABLE issues ADD COLUMN IF NOT EXISTS status_category TEXT;
@@ -893,10 +905,56 @@ def cmd_report(con, args) -> None:
         "stats": stats_data(con, argparse.Namespace(scope=args.scope, window=args.window, snapshots=10)),
         "calibrate": calibrate_data(con, argparse.Namespace(scope=args.scope)),
     }
-    out = args.out or (args.db or default_db()).parent / "reports" / f"{args.scope}-{data['forecast']['history']['end']}.html"
+    now = datetime.now()
+    root = reports_dir(args)
+    # One file per run, never overwritten: reports/<scope>/<scope>-<date>-<time>.html
+    out = args.out or root / args.scope / f"{args.scope}-{now:%Y-%m-%d-%H%M%S}.html"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(report.render(data))
+    fc = data["forecast"]
+    h = fc["history"]
+    con.execute(
+        "INSERT INTO reports VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [args.scope, now, str(out.resolve()), h["end"], fc["items"], fc["percentiles"]["no_growth"]["p85"],
+         h["completed_per_week"] - h["created_per_week"] > 0.1 * h["completed_per_week"],
+         fc.get("target_date"), (fc.get("chance") or {}).get("no_growth")],
+    )
+    write_index(con, root)
     print(out)
+
+
+def reports_dir(args) -> Path:
+    return (args.db or default_db()).parent / "reports"
+
+
+def saved_reports(con, scope: str | None = None) -> list[dict]:
+    where, params = ("WHERE scope = ?", [scope]) if scope else ("", [])
+    rows = con.execute(f"SELECT * FROM reports {where} ORDER BY created_at DESC", params)
+    cols = [c[0] for c in rows.description]
+    return [dict(zip(cols, r)) for r in rows.fetchall() if Path(r[2]).exists()]
+
+
+def write_index(con, root: Path) -> Path:
+    import report
+
+    root.mkdir(parents=True, exist_ok=True)
+    index = root / "index.html"
+    index.write_text(report.render_index(saved_reports(con), root))
+    return index
+
+
+def cmd_reports(con, args) -> None:
+    rows = saved_reports(con, args.scope)
+    index = write_index(con, reports_dir(args))
+    if args.json:
+        print(json.dumps({"index": str(index), "reports": rows}, indent=2, default=str))
+        return
+    if not rows:
+        print("No saved reports yet; run `report <scope>`.")
+        return
+    for r in rows:
+        print(f"{r['created_at']:%Y-%m-%d %H:%M}  {r['scope']:<12} 85% by {r['p85'] or '—'}  {r['path']}")
+    print(f"\nIndex: {index}")
 
 
 # --- cli --------------------------------------------------------------------
@@ -966,7 +1024,7 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("report", help="write a self-contained HTML report and print its path")
     p.add_argument("scope")
-    p.add_argument("--out", type=Path, help="output file (default: reports/ next to the DB)")
+    p.add_argument("--out", type=Path, help="output file (default: reports/<scope>/<scope>-<timestamp>.html next to the DB)")
     p.add_argument("--window", type=int, default=90)
     p.add_argument("--target-date", type=date.fromisoformat, help="add the chance of finishing by this date")
     p.add_argument("--order", action="append", help="epic priority order, comma-separated")
@@ -974,6 +1032,10 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--epic-share", type=float)
     p.add_argument("--runs", type=int, default=10_000)
     p.add_argument("--seed", type=int)
+
+    p = sub.add_parser("reports", help="list saved HTML reports, newest first, and refresh the index page")
+    p.add_argument("scope", nargs="?")
+    p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("stats", help="weekly throughput, lead time by type, backlog snapshots")
     p.add_argument("scope")
@@ -993,6 +1055,7 @@ def main(argv: list[str] | None = None) -> None:
             "stats": cmd_stats,
             "aging": cmd_aging,
             "report": cmd_report,
+            "reports": cmd_reports,
         }[args.cmd](con, args)
     finally:
         con.close()

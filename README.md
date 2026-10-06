@@ -35,10 +35,12 @@ uv run $M calibrate                           # how past forecasts held up
 uv run $M epics PAY --order PAY-98,PAY-123    # per-epic: current pace, priority order, sole focus
 uv run $M aging PAY                           # open items older than their type usually takes
 uv run $M report PAY                          # all of it as one self-contained HTML page
+uv run $M reports                             # saved reports, newest first, and the index page
 ```
 
 The DB lives at `$MCMC_DB`, else `$CLAUDE_PLUGIN_DATA/mcmc.duckdb`, else
-`~/.local/share/mcmc/mcmc.duckdb`.
+`~/.local/share/mcmc/mcmc.duckdb`. Reports are kept next to it in `reports/<scope>/`, one
+timestamped file per run, with `reports/index.html` listing them all.
 
 The simulator on its own is stdlib-only and takes plain completion dates:
 
