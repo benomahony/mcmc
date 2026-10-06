@@ -295,7 +295,8 @@ def test_report_is_self_contained_html_and_escapes_jira_text(db, capsys, tmp_pat
                   "--order", "<script>alert(1)</script>", "--out", str(out))
     assert printed.strip() == str(out)
     html = out.read_text()
-    for section in ("When will the open backlog be done?", "Throughput and intake", "Epics", "Ageing open work", "Track record"):
+    for section in ("The short version", "When will today's backlog be done?", "Is the backlog shrinking?",
+                    "When will the planned epics land?", "What looks stuck?"):
         assert section in html
     assert "<script>alert" not in html and "<img src=x" not in html
     assert "&lt;script&gt;" in html

@@ -753,7 +753,12 @@ def stats_data(con, args) -> dict:
     out = {
         "scope": args.scope,
         "window": [h_start.isoformat(), h_end.isoformat()],
-        "weekly": [{"week": w.isoformat(), "completed": c, "created": n} for w, c, n in weekly],
+        # `days`: how many of the week's 7 days fall inside the window (edge weeks are partial).
+        "weekly": [
+            {"week": w.isoformat(), "completed": c, "created": n,
+             "days": (min(w + timedelta(days=6), h_end) - max(w, h_start)).days + 1}
+            for w, c, n in weekly
+        ],
         "by_type": [
             {"type": t, "completed": c, "open": open_by_type.get(t, 0), "lead_time_days": {"p50": a, "p85": b, "p95": d}}
             for t, c, a, b, d in by_type
@@ -775,7 +780,8 @@ def cmd_stats(con, args) -> None:
         return
     print(f"Scope {args.scope}, {out['window'][0]} → {out['window'][1]}\n\nweek         completed  created")
     for w in out["weekly"]:
-        print(f"{w['week']}  {w['completed']:>9}  {w['created']:>7}")
+        partial = f"  (partial: {w['days']} of 7 days)" if w["days"] < 7 else ""
+        print(f"{w['week']}  {w['completed']:>9}  {w['created']:>7}{partial}")
     print("\ntype                 completed  open  lead time p50/p85/p95 (days)")
     for t in out["by_type"]:
         lt = t["lead_time_days"]
@@ -872,8 +878,11 @@ def cmd_report(con, args) -> None:
         scope=args.scope, window=args.window, history_end=None, start=None, seed=args.seed, runs=args.runs,
         max_days=1095, no_record=True, target_date=args.target_date,
     )
+    jql, last_sync = con.execute("SELECT jql, last_sync FROM scopes WHERE name = ?", [args.scope]).fetchone() or (None, None)
     data = {
         "scope": args.scope,
+        "jql": jql,
+        "last_sync": last_sync.isoformat() if last_sync else None,
         "forecast": forecast_data(
             con, argparse.Namespace(**common, type=None, by=None, items=None, at_least=None, no_scope_growth=True)
         ),
