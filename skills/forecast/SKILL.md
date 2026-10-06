@@ -15,6 +15,17 @@ The CLI (needs `uv`; `--help` on any subcommand lists flags):
 M="${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/mcmc.py"
 ```
 
+## 0. Health check
+
+Before anything else, confirm the two prerequisites and stop with the fix if either is missing:
+
+- **Jira MCP**: you need a tool that searches Jira by JQL (Atlassian MCP:
+  `searchJiraIssuesUsingJql`; `mcp-atlassian`: `jira_search`; any other Jira MCP works).
+  If none is connected, tell the user to add one and authenticate with `/mcp`:
+  `claude mcp add --transport http atlassian https://mcp.atlassian.com/v1/mcp`.
+  If one is listed but its calls fail with an auth error, tell them to re-authenticate with `/mcp`.
+- **uv**: `uv --version` must succeed; if not, point them to https://docs.astral.sh/uv/.
+
 ## 1. Pin down the question
 
 Get (ask only for what is missing):
