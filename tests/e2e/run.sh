@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 question="${1:-When will the open PAY backlog be done? Use the PAY project.}"
 work="$(mktemp -d)"
-export MCMC_DB="$work/mcmc.duckdb"
+export MCMC_DB="$work/mcmc.sqlite"
 
 JIRA820_PORT=8820 JIRA820_SEED=42 JIRA820_PROJECT_KEY=PAY JIRA820_LOCALE=en \
   uv run --group dev jira820 >"$work/jira820.log" 2>&1 &

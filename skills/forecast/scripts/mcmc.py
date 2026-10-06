@@ -1,8 +1,4 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.12"
-# dependencies = ["duckdb>=1.1"]
-# ///
+#!/usr/bin/env python3
 """Jira history store + Monte Carlo forecasts with scope growth and calibration.
 
 Subcommands:
@@ -16,8 +12,8 @@ Subcommands:
   report SCOPE           all of the above as one self-contained HTML page, kept in reports/
   reports [SCOPE]        list saved reports (newest first) and the index page
 
-DB: --db, else $MCMC_DB, else $CLAUDE_PLUGIN_DATA/mcmc.duckdb, else
-~/.local/share/mcmc/mcmc.duckdb.
+DB: --db, else $MCMC_DB, else $CLAUDE_PLUGIN_DATA/mcmc.sqlite, else
+~/.local/share/mcmc/mcmc.sqlite.
 """
 
 from __future__ import annotations
@@ -501,7 +497,7 @@ COMMANDS = {
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--db", type=Path, default=None, help="DuckDB file (see above for default)")
+    ap.add_argument("--db", type=Path, default=None, help="SQLite file (see above for default)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     for add in (add_sync_commands, add_forecast_commands, add_review_commands, add_report_commands):
         add(sub)

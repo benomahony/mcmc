@@ -1,9 +1,9 @@
 import json
 import re
+import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-import duckdb
 import pytest
 
 import jira_input
@@ -15,7 +15,7 @@ START = date(2026, 7, 1)
 
 @pytest.fixture
 def db(tmp_path):
-    return tmp_path / "t.duckdb"
+    return tmp_path / "t.sqlite"
 
 
 def run(db, capsys, *argv):
@@ -326,7 +326,7 @@ def test_failed_ingest_leaves_nothing_half_written(db, capsys, tmp_path):
     bad = jira_input.normalise(jira_issue("PAY-2", START)) | {"created": "not a date"}
     con = store.connect(db)
     # The JQL update succeeds, then the issue insert fails: the update must be rolled back with it.
-    with pytest.raises(duckdb.Error), store.transaction(con):
+    with pytest.raises(sqlite3.Error), store.transaction(con):
         store.ingest(con, store.Sync("PAY", datetime(2026, 9, 1), full=True, jql="project = OTHER"), [bad])
     assert con.execute("SELECT jql FROM scopes").fetchall() == [("project = PAY",)]
     assert con.execute("SELECT key FROM issues").fetchall() == [("PAY-1",)]

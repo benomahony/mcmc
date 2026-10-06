@@ -53,7 +53,7 @@ def done_transition(jira, key):
 
 
 def test_full_then_incremental_sync_and_forecast(jira, tmp_path, capsys):
-    db = tmp_path / "mcmc.duckdb"
+    db = tmp_path / "mcmc.sqlite"
     assert cli(db, capsys, "sync-info", "PAY")["mode"] == "full"
 
     full = search(jira, "project = PAY AND (statusCategory != Done OR resolved >= -90d)", page_size=37)

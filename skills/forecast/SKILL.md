@@ -6,10 +6,10 @@ description: Monte Carlo delivery forecast from Jira history. Use when the user 
 # Jira Monte Carlo forecast
 
 Forecast from **historical throughput** (completed items per day), not estimates. History is
-kept in a local DuckDB, so repeat runs only fetch what changed, the backlog is snapshotted on
+kept in a local SQLite database, so repeat runs only fetch what changed, the backlog is snapshotted on
 every sync, and every forecast is recorded for later calibration.
 
-The CLI (needs `uv`; `--help` on any subcommand lists flags):
+The CLI (plain `python3`, no dependencies; `--help` on any subcommand lists flags):
 
 ```bash
 M="${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/mcmc.py"
@@ -17,20 +17,13 @@ M="${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/mcmc.py"
 
 ## 0. Health check
 
-Before anything else, confirm the two prerequisites and stop with the fix if either is missing:
+Before anything else, confirm a Jira MCP is connected and stop with the fix if not:
 
 - **Jira MCP**: you need a tool that searches Jira by JQL (Atlassian MCP:
   `searchJiraIssuesUsingJql`; `mcp-atlassian`: `jira_search`; any other Jira MCP works).
   If none is connected, tell the user to add one and authenticate with `/mcp`:
   `claude mcp add --transport http atlassian https://mcp.atlassian.com/v1/mcp`.
   If one is listed but its calls fail with an auth error, tell them to re-authenticate with `/mcp`.
-- **uv**: if `uv --version` fails, use the no-dependency fallback instead of the steps below:
-  fetch `resolved >= -<window>d` and count the open items with the Jira MCP, write the
-  resolution dates one per line, then
-  `python3 "${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/forecast.py" dates.txt --items <open count>`
-  (or `--by <date>`). It answers *when* and *how many* only, with no stored history, scope
-  growth, epics, calibration or report, so say so and suggest installing
-  [uv](https://docs.astral.sh/uv/) for the rest.
 
 ## 1. Pin down the question
 
@@ -46,7 +39,7 @@ Get (ask only for what is missing):
 ## 2. Sync from Jira
 
 ```bash
-uv run "$M" sync-info <scope>
+python3 "$M" sync-info <scope>
 ```
 
 returns `mode` (`full` or `incremental`), `updated_since`, and the stored `jql`. Then query
@@ -78,7 +71,7 @@ Sub-tasks are dropped automatically. Epic links only arrive with a **full** sync
 that haven't changed, so if `epics` reports none, do a full sync. Then:
 
 ```bash
-uv run "$M" ingest <scope> page1.csv page2.csv ... --jql '<scope JQL>' [--full]
+python3 "$M" ingest <scope> page1.csv page2.csv ... --jql '<scope JQL>' [--full]
 ```
 
 Pass every page of a sync to **one** `ingest` call (don't concatenate files). Pass `--full`
@@ -91,18 +84,18 @@ wasn't, typically because it was resolved before the window), fetch them with
 ## 3. Forecast
 
 ```bash
-uv run "$M" forecast <scope> [--type Story]...        # when will the open backlog be done?
-uv run "$M" forecast <scope> --items 42               # when will N items be done?
-uv run "$M" forecast <scope> --by 2026-12-18          # how many by a date?
-uv run "$M" forecast <scope> --target-date 2026-12-01 # ...plus the chance of being done by a date
-uv run "$M" forecast <scope> --by 2026-12-18 --at-least 40   # chance of finishing at least N by a date
-uv run "$M" epics <scope> [--epic PAY-123]...         # when will each open epic be done?
-uv run "$M" epics <scope> --order PAY-98,PAY-123 [--wip 2]   # ...if worked in this priority order
-uv run "$M" stats <scope>                             # weekly throughput/arrivals, lead time by type, snapshots
-uv run "$M" aging <scope> [--all]                     # open items older than their type's p85/p95 lead time
-uv run "$M" report <scope> [--order ...] [--target-date ...]  # everything above as one HTML page; prints its path
-uv run "$M" reports [<scope>]                         # saved reports, newest first, + the index page
-uv run "$M" calibrate [<scope>]                       # how past forecasts held up
+python3 "$M" forecast <scope> [--type Story]...        # when will the open backlog be done?
+python3 "$M" forecast <scope> --items 42               # when will N items be done?
+python3 "$M" forecast <scope> --by 2026-12-18          # how many by a date?
+python3 "$M" forecast <scope> --target-date 2026-12-01 # ...plus the chance of being done by a date
+python3 "$M" forecast <scope> --by 2026-12-18 --at-least 40   # chance of finishing at least N by a date
+python3 "$M" epics <scope> [--epic PAY-123]...         # when will each open epic be done?
+python3 "$M" epics <scope> --order PAY-98,PAY-123 [--wip 2]   # ...if worked in this priority order
+python3 "$M" stats <scope>                             # weekly throughput/arrivals, lead time by type, snapshots
+python3 "$M" aging <scope> [--all]                     # open items older than their type's p85/p95 lead time
+python3 "$M" report <scope> [--order ...] [--target-date ...]  # everything above as one HTML page; prints its path
+python3 "$M" reports [<scope>]                         # saved reports, newest first, + the index page
+python3 "$M" calibrate [<scope>]                       # how past forecasts held up
 ```
 
 `forecast` defaults the remaining count to open items in the DB, and for *when* questions
