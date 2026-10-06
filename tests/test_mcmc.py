@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -305,26 +306,27 @@ def test_report_is_self_contained_html_and_escapes_jira_text(db, capsys, tmp_pat
     assert "None" not in html and "nan" not in html
 
 
-def test_reports_are_kept_with_history_and_indexed(db, capsys, tmp_path, monkeypatch):
+def test_reports_are_kept_with_history_and_indexed(db, capsys, tmp_path):
     seed_steady(db, capsys, tmp_path)
-    times = iter([datetime(2026, 9, 1, 9, 0), datetime(2026, 9, 1, 9, 0, 5)])
-
-    class Clock(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return next(times)
-
-    monkeypatch.setattr(mcmc, "datetime", Clock)
     first = Path(run(db, capsys, "report", "PAY", "--runs", "200").strip())
     second = Path(run(db, capsys, "report", "PAY", "--runs", "200").strip())
-    assert first != second and first.exists() and second.exists()  # same day, nothing overwritten
+    assert first != second and first.exists() and second.exists()  # back to back, nothing overwritten
     assert first.parent == db.parent / "reports" / "PAY"
-    assert first.name == "PAY-2026-09-01-090000.html"
+    assert re.fullmatch(r"PAY-\d{4}-\d\d-\d\d-\d{6}(-\d+)?\.html", first.name)
 
     listing = json.loads(run(db, capsys, "reports", "--json"))
     assert [Path(r["path"]) for r in listing["reports"]] == [second, first]  # newest first
     index = Path(listing["index"]).read_text()
-    assert 'href="PAY/PAY-2026-09-01-090005.html"' in index and "latest" in index
+    assert f'href="PAY/{second.name}"' in index and "latest" in index
 
     second.unlink()  # deleted files drop out of the listing
     assert [Path(r["path"]) for r in json.loads(run(db, capsys, "reports", "--json"))["reports"]] == [first]
+
+
+def test_unused_path_never_overwrites(tmp_path):
+    path = tmp_path / "PAY-2026-09-01-090000.html"
+    assert mcmc.unused_path(path) == path
+    path.write_text("x")
+    assert mcmc.unused_path(path).name == "PAY-2026-09-01-090000-2.html"
+    (tmp_path / "PAY-2026-09-01-090000-2.html").write_text("x")
+    assert mcmc.unused_path(path).name == "PAY-2026-09-01-090000-3.html"

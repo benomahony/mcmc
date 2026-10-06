@@ -908,7 +908,7 @@ def cmd_report(con, args) -> None:
     now = datetime.now()
     root = reports_dir(args)
     # One file per run, never overwritten: reports/<scope>/<scope>-<date>-<time>.html
-    out = args.out or root / args.scope / f"{args.scope}-{now:%Y-%m-%d-%H%M%S}.html"
+    out = args.out or unused_path(root / args.scope / f"{args.scope}-{now:%Y-%m-%d-%H%M%S}.html")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(report.render(data))
     fc = data["forecast"]
@@ -921,6 +921,16 @@ def cmd_report(con, args) -> None:
     )
     write_index(con, root)
     print(out)
+
+
+def unused_path(path: Path) -> Path:
+    """`path`, or `name-2.html`, `name-3.html`... if it's taken (two reports in the same second)."""
+    n = 1
+    candidate = path
+    while candidate.exists():
+        n += 1
+        candidate = path.with_stem(f"{path.stem}-{n}")
+    return candidate
 
 
 def reports_dir(args) -> Path:
