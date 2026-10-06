@@ -1,9 +1,8 @@
 import json
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
-import duckdb
 import pytest
 
 import mcmc
@@ -38,12 +37,6 @@ def jira_issue(key, created, resolved=None, kind="Story"):
             "status": {"statusCategory": {"key": "done" if resolved else "indeterminate"}},
         },
     }
-
-
-def set_last_sync(db, when: date):
-    con = duckdb.connect(str(db))
-    con.execute("UPDATE scopes SET last_sync = ?", [datetime.combine(when, datetime.min.time())])
-    con.close()
 
 
 def test_normalise_accepts_jira_and_flat_shapes():
@@ -98,8 +91,7 @@ def seed_steady(db, capsys, tmp_path, days=60, open_items=20):
     issues = [jira_issue(f"S-{i}", START, START + timedelta(i)) for i in range(1, days + 1)]
     issues += [jira_issue(f"B-{i}", START + timedelta(2 * i), kind="Bug") for i in range(1, days // 2 + 1)]
     issues += [jira_issue(f"O-{i}", START, kind="Story") for i in range(open_items)]
-    run(db, capsys, "ingest", "PAY", write(tmp_path, issues), "--full")
-    set_last_sync(db, START + timedelta(days))
+    run(db, capsys, "ingest", "PAY", write(tmp_path, issues), "--full", "--as-of", str(START + timedelta(days)))
 
 
 def test_forecast_when_uses_db_backlog_and_type_filter(db, capsys, tmp_path):
@@ -131,8 +123,7 @@ def test_how_many_records_and_calibrates(db, capsys, tmp_path):
     assert cal["forecasts"][0]["actual"] is None  # target date not reached by sync yet
 
     later = [jira_issue(f"L-{i}", end, end + timedelta(i)) for i in range(1, 9)]  # only 8 done in 10 days
-    run(db, capsys, "ingest", "PAY", write(tmp_path, later))
-    set_last_sync(db, end + timedelta(11))
+    run(db, capsys, "ingest", "PAY", write(tmp_path, later), "--as-of", str(end + timedelta(11)))
     cal = json.loads(run(db, capsys, "calibrate", "--json"))
     assert cal["forecasts"][0]["actual"] == 8
     assert cal["summary"]["how_many"]["p85"] == {"held": 0, "missed": 1, "pending": 0}
@@ -143,8 +134,7 @@ def test_when_calibration_tracks_original_backlog(db, capsys, tmp_path):
     run(db, capsys, "forecast", "PAY", "--type", "Story", "--window", "60", "--no-scope-growth", "--json")
     end = START + timedelta(60)
     done = [jira_issue(f"O-{i}", START, end + timedelta(i + 1)) for i in range(5)]
-    run(db, capsys, "ingest", "PAY", write(tmp_path, done))
-    set_last_sync(db, end + timedelta(6))
+    run(db, capsys, "ingest", "PAY", write(tmp_path, done), "--as-of", str(end + timedelta(6)))
     f = json.loads(run(db, capsys, "calibrate", "PAY", "--json"))["forecasts"][0]
     assert f["actual"] == (end + timedelta(5)).isoformat()
     assert all(f["hits"].values())
@@ -181,8 +171,7 @@ def test_epics_forecast_current_pace_vs_sole_focus(db, capsys, tmp_path):
     rows.append(f"Z-1,Story,{START},,To Do,E-2")  # epic issue not synced, but has open children
     path = tmp_path / "e.csv"
     path.write_text("\n".join(rows))
-    run(db, capsys, "ingest", "PAY", str(path), "--full")
-    set_last_sync(db, end)
+    run(db, capsys, "ingest", "PAY", str(path), "--full", "--as-of", str(end))
 
     assert json.loads(run(db, capsys, "sync-info", "PAY"))["missing_epics"] == ["E-2"]
 
@@ -227,8 +216,7 @@ def test_aging_flags_items_older_than_their_type_lead_time(db, capsys, tmp_path)
     ]
     path = tmp_path / "a.csv"
     path.write_text("\n".join(rows))
-    run(db, capsys, "ingest", "PAY", str(path), "--full")
-    set_last_sync(db, end)
+    run(db, capsys, "ingest", "PAY", str(path), "--full", "--as-of", str(end))
 
     out = json.loads(run(db, capsys, "aging", "PAY", "--json"))
     assert (out["open"], out["stale"], out["at_risk"]) == (4, 2, 1)
@@ -258,9 +246,8 @@ def test_epics_chance_by_target_date(db, capsys, tmp_path):
     rows += [f"C-{i},Story,{START},,To Do,E-1" for i in range(5)]
     path = tmp_path / "e.csv"
     path.write_text("\n".join(rows))
-    run(db, capsys, "ingest", "PAY", str(path), "--full")
     end = START + timedelta(59)
-    set_last_sync(db, end)
+    run(db, capsys, "ingest", "PAY", str(path), "--full", "--as-of", str(end))
     e = lambda days: json.loads(
         run(db, capsys, "epics", "PAY", "--window", "60", "--order", "E-1", "--epic-share", "1",
             "--target-date", str(end + timedelta(days)), "--no-record", "--json")
@@ -290,8 +277,7 @@ def test_report_is_self_contained_html_and_escapes_jira_text(db, capsys, tmp_pat
         "key,type,created,resolved,status_category,epic\n"
         f"X-1,<img src=x onerror=alert(1)>,{START},,In Progress,<script>alert(1)</script>\n"
     )
-    run(db, capsys, "ingest", "PAY", str(hostile))
-    set_last_sync(db, START + timedelta(60))
+    run(db, capsys, "ingest", "PAY", str(hostile), "--as-of", str(START + timedelta(60)))
     out = tmp_path / "r.html"
     printed = run(db, capsys, "report", "PAY", "--runs", "300", "--seed", "1", "--target-date", "2026-12-01",
                   "--order", "<script>alert(1)</script>", "--out", str(out))

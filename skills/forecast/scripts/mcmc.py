@@ -233,7 +233,7 @@ def cmd_ingest(con, args) -> None:
     subtasks = sum(i["subtask"] for i in issues)
     if not args.include_subtasks:
         issues = [i for i in issues if not i["subtask"]]
-    now = datetime.now()
+    now = args.as_of or datetime.now()
     con.execute(
         "INSERT INTO scopes VALUES (?, ?, ?, NULL, NULL) ON CONFLICT DO NOTHING", [args.scope, args.jql, now]
     )
@@ -984,6 +984,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--jql", help="JQL defining the scope (stored for later syncs)")
     p.add_argument("--full", action="store_true", help="payload has every open item; drop open items not in it")
     p.add_argument("--include-subtasks", action="store_true", help="keep sub-tasks (dropped by default)")
+    p.add_argument("--as-of", type=datetime.fromisoformat,
+                   help="when this data was fetched from Jira (default: now); e.g. to load a historical snapshot")
     p.add_argument("--epic-field", help="JSON field holding the epic key, e.g. customfield_10008 (Data Center Epic Link)")
 
     p = sub.add_parser("forecast", help="Monte Carlo forecast from stored history")
