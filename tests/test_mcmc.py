@@ -265,3 +265,17 @@ def test_epics_chance_by_target_date(db, capsys, tmp_path):
     )["epics"][0]["chance"]
     assert e(5) == {"current_pace": 1.0, "sole_focus": 1.0, "priority": 1.0}
     assert e(4) == {"current_pace": 0.0, "sole_focus": 0.0, "priority": 0.0}
+
+
+def test_every_command_prints_text(db, capsys, tmp_path):
+    seed_steady(db, capsys, tmp_path)
+    for argv in (
+        ["sync-info", "PAY"],
+        ["forecast", "PAY", "--runs", "200", "--target-date", "2026-12-01"],
+        ["forecast", "PAY", "--runs", "200", "--by", "2026-12-01", "--at-least", "5"],
+        ["epics", "PAY", "--runs", "200"],
+        ["calibrate"],
+        ["stats", "PAY"],
+        ["aging", "PAY"],
+    ):
+        assert run(db, capsys, *argv).strip(), argv

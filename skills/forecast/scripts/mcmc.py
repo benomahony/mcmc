@@ -97,6 +97,11 @@ ALTER TABLE forecasts ADD COLUMN IF NOT EXISTS epic TEXT;
 """
 
 
+def public(out: dict) -> dict:
+    """Drop private keys (raw simulation samples etc.) before printing JSON."""
+    return {k: v for k, v in out.items() if not k.startswith("_")}
+
+
 def default_db() -> Path:
     if env := os.environ.get("MCMC_DB"):
         return Path(env)
@@ -346,7 +351,7 @@ def target_days(start: date, target: date | None) -> int | None:
     return (target - start).days
 
 
-def cmd_forecast(con, args) -> None:
+def forecast_data(con, args) -> dict:
     h_start, h_end = history_window(con, args.scope, args.window, args.history_end)
     types = args.type or None
     throughput = daily_series(con, args.scope, "resolved", h_start, h_end, types)
@@ -377,7 +382,7 @@ def cmd_forecast(con, args) -> None:
     if warnings:
         out["warnings"] = warnings
 
-    distributions = {}
+    distributions = out["_samples"] = {}
     if args.by:
         horizon = (args.by - start).days
         if horizon <= 0:
@@ -417,9 +422,15 @@ def cmd_forecast(con, args) -> None:
                 )
         out["max_days"] = args.max_days
 
+    return out
+
+
+def cmd_forecast(con, args) -> None:
+    out = forecast_data(con, args)
     if args.json:
-        print(json.dumps(out, indent=2, default=str))
+        print(json.dumps(public(out), indent=2, default=str))
         return
+    types, start, distributions = out["types"], out["start"], out["_samples"]
     h = out["history"]
     print(f"Scope {args.scope}" + (f" (types: {', '.join(types)})" if types else ""))
     print(
@@ -455,7 +466,7 @@ def cmd_forecast(con, args) -> None:
 # --- epics ------------------------------------------------------------------
 
 
-def cmd_epics(con, args) -> None:
+def epics_data(con, args) -> dict:
     h_start, h_end = history_window(con, args.scope, args.window, args.history_end)
     start = args.start or h_end
     rng = random.Random(args.seed)
@@ -543,13 +554,23 @@ def cmd_epics(con, args) -> None:
         out["priority"] = priority
     if deadline is not None:
         out["target_date"] = args.target_date.isoformat()
+    return out
+
+
+def cmd_epics(con, args) -> None:
+    out = epics_data(con, args)
     if args.json:
-        print(json.dumps(out, indent=2, default=str))
+        print(json.dumps(public(out), indent=2, default=str))
         return
+    epics, priority, deadline = out["epics"], out.get("priority"), out.get("target_date")
     if not epics:
         print(f"No open epics in scope {args.scope} (were epic links ingested?)")
         return
-    print(f"Scope {args.scope}: epics from {start}, history {h_start} → {h_end} ({sum(team)} team completions)\n")
+    h = out["history"]
+    print(
+        f"Scope {args.scope}: epics from {out['start']}, history {h['start']} → {h['end']} "
+        f"({h['team_completed']} team completions)\n"
+    )
     head = f"{'epic':<12} {'status':<10} {'open':>4} {'done/window':>11}   {'current pace p50':>16} {'p85':>11}   {'sole focus p85':>14}"
     models_shown = ["current_pace", "sole_focus"] + (["priority"] if args.order else [])
     if args.order:
@@ -575,7 +596,7 @@ def cmd_epics(con, args) -> None:
             c = e.get("chance", {})
             line += "   " + " ".join(f"{c[m]:>4.0%}" if m in c else "   -" for m in models_shown)
         print(line)
-    print(f"\n{unparented_open} open items have no epic.")
+    print(f"\n{out['open_without_epic']} open items have no epic.")
     if stale := [e["epic"] for e in epics if e["status"] == "done" and e["open"]]:
         print(f"Epics marked done but with open children: {', '.join(stale)}")
     print("current pace = resampling the epic's own completions; sole focus = whole team on this epic only.")
@@ -648,7 +669,7 @@ def evaluate(con, f: dict, synced_to: date) -> dict:
     return {"actual": actual.isoformat() if actual else None, "hits": hits}
 
 
-def cmd_calibrate(con, args) -> None:
+def calibrate_data(con, args) -> dict:
     where, params = ("WHERE f.scope = ?", [args.scope]) if args.scope else ("", [])
     rows = con.execute(
         f"""SELECT f.*, s.last_sync FROM forecasts f JOIN scopes s ON s.name = f.scope {where} ORDER BY f.id""",
@@ -672,26 +693,32 @@ def cmd_calibrate(con, args) -> None:
         for k, hit in result["hits"].items():
             s = summary.setdefault(model, {}).setdefault(k, {"held": 0, "missed": 0, "pending": 0})
             s["held" if hit else "pending" if hit is None else "missed"] += 1
+    out = {"summary": summary, "forecasts": detail}
+    return out
+
+
+def cmd_calibrate(con, args) -> None:
+    out = calibrate_data(con, args)
     if args.json:
-        print(json.dumps({"summary": summary, "forecasts": detail}, indent=2, default=str))
+        print(json.dumps(public(out), indent=2, default=str))
         return
-    if not forecasts:
+    if not out["forecasts"]:
         print("No recorded forecasts.")
         return
     print("Calibration: share of resolved forecasts where the pN answer held (well calibrated ≈ N%)\n")
-    for model, by_p in summary.items():
+    for model, by_p in out["summary"].items():
         print(model)
         for k, s in by_p.items():
             resolved = s["held"] + s["missed"]
             rate = f"{s['held'] / resolved:.0%}" if resolved else "  -"
             print(f"  {k}: {rate:>4} held  ({s['held']}/{resolved} resolved, {s['pending']} pending)")
-    print(f"\n{len(forecasts)} forecasts; --json for per-forecast detail")
+    print(f"\n{len(out['forecasts'])} forecasts; --json for per-forecast detail")
 
 
 # --- stats ------------------------------------------------------------------
 
 
-def cmd_stats(con, args) -> None:
+def stats_data(con, args) -> dict:
     h_start, h_end = history_window(con, args.scope, args.window, None)
     weekly = con.execute(
         """
@@ -737,10 +764,15 @@ def cmd_stats(con, args) -> None:
         ],
         "snapshots": [{"taken_at": t.isoformat(), "open": o, "done": d} for t, o, d in reversed(snaps)],
     }
+    return out
+
+
+def cmd_stats(con, args) -> None:
+    out = stats_data(con, args)
     if args.json:
-        print(json.dumps(out, indent=2, default=str))
+        print(json.dumps(public(out), indent=2, default=str))
         return
-    print(f"Scope {args.scope}, {h_start} → {h_end}\n\nweek         completed  created")
+    print(f"Scope {args.scope}, {out['window'][0]} → {out['window'][1]}\n\nweek         completed  created")
     for w in out["weekly"]:
         print(f"{w['week']}  {w['completed']:>9}  {w['created']:>7}")
     print("\ntype                 completed  open  lead time p50/p85/p95 (days)")
@@ -759,7 +791,7 @@ def cmd_stats(con, args) -> None:
 MIN_TYPE_SAMPLE = 10
 
 
-def cmd_aging(con, args) -> None:
+def aging_data(con, args) -> dict:
     """Open items whose age already exceeds what most completed items of their type took."""
     h_start, h_end = history_window(con, args.scope, args.window, None)
     lead = con.execute(
@@ -802,11 +834,16 @@ def cmd_aging(con, args) -> None:
         "stale": sum(r["risk"] == "stale" for r in rows),
         "items": rows if args.all else flagged,
     }
+    return out
+
+
+def cmd_aging(con, args) -> None:
+    out = aging_data(con, args)
     if args.json:
-        print(json.dumps(out, indent=2, default=str))
+        print(json.dumps(public(out), indent=2, default=str))
         return
     print(
-        f"Scope {args.scope}, as of {h_end}: {out['open']} open, {out['stale']} stale (older than p95 lead time), "
+        f"Scope {args.scope}, as of {out['as_of']}: {out['open']} open, {out['stale']} stale (older than p95 lead time), "
         f"{out['at_risk']} at risk (older than p85)\n"
     )
     if not out["items"]:
