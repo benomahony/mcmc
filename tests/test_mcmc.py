@@ -64,6 +64,12 @@ def test_ingest_csv_drops_subtasks(db, capsys, tmp_path):
     out = json.loads(run(db, capsys, "ingest", "PAY", str(path), "--full"))
     assert (out["ingested"], out["skipped_subtasks"], out["open"], out["done"]) == (2, 1, 1, 1)
 
+    # One file per page, each with its own header, ingested together (a full sync spans all pages).
+    page2 = tmp_path / "page2.csv"
+    page2.write_text("key,type,created,resolved,status_category\nPAY-4,Task,2026-07-03,,To Do\n")
+    out = json.loads(run(db, capsys, "ingest", "PAY", str(path), str(page2), "--full"))
+    assert (out["ingested"], out["removed"], out["open"]) == (3, 0, 2)
+
 
 def test_sync_info_full_then_incremental(db, capsys, tmp_path):
     assert json.loads(run(db, capsys, "sync-info", "PAY"))["mode"] == "full"

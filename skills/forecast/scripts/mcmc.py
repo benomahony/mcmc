@@ -7,7 +7,7 @@
 
 Subcommands:
   sync-info SCOPE        what to fetch next (full or incremental, and since when)
-  ingest SCOPE FILE      upsert issues fetched from Jira, snapshot the backlog
+  ingest SCOPE FILE...   upsert issues fetched from Jira, snapshot the backlog
   forecast SCOPE         simulate from stored history and record the forecast
   epics SCOPE            per-epic forecasts: at current pace, and if it had the team's sole focus
   calibrate [SCOPE]      score past forecasts against what actually happened
@@ -207,7 +207,11 @@ def missing_epics(con, scope: str) -> list[str]:
 
 
 def cmd_ingest(con, args) -> None:
-    issues = load_issues(Path(args.file).read_text() if args.file != "-" else sys.stdin.read(), args.epic_field)
+    issues = [
+        issue
+        for f in args.files
+        for issue in load_issues(sys.stdin.read() if f == "-" else Path(f).read_text(), args.epic_field)
+    ]
     subtasks = sum(i["subtask"] for i in issues)
     if not args.include_subtasks:
         issues = [i for i in issues if not i["subtask"]]
@@ -833,7 +837,7 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("ingest", help="upsert issues (JSON list/lines, or CSV: key,type,created,resolved,status_category)")
     p.add_argument("scope")
-    p.add_argument("file", help="JSON file, or - for stdin")
+    p.add_argument("files", nargs="+", metavar="file", help="CSV/JSON files (e.g. one per page), or - for stdin")
     p.add_argument("--jql", help="JQL defining the scope (stored for later syncs)")
     p.add_argument("--full", action="store_true", help="payload has every open item; drop open items not in it")
     p.add_argument("--include-subtasks", action="store_true", help="keep sub-tasks (dropped by default)")

@@ -43,7 +43,8 @@ Request only the fields `issuetype,created,resolutiondate,status` plus the **epi
 `parent` on Jira Cloud, or the "Epic Link" custom field on Server/Data Center (find its id,
 e.g. `customfield_10008`, via the MCP's field search). Page through **all**
 results (`nextPageToken` / `startAt` / `start_at`) — a truncated pull silently understates
-throughput or backlog. Write what you fetched to a scratch file as CSV — one row per issue,
+throughput or backlog. After each page, write it to its own scratch CSV file (each with the
+header row) — one row per issue,
 dates as `YYYY-MM-DD`, `resolved` empty when unresolved, `status_category` as Jira reports
 it (`Done`, `In Progress`, `To Do`):
 
@@ -60,10 +61,11 @@ Sub-tasks are dropped automatically. Epic links only arrive with a **full** sync
 that haven't changed, so if `epics` reports none, do a full sync. Then:
 
 ```bash
-uv run "$M" ingest <scope> issues.csv --jql '<scope JQL>' [--full]
+uv run "$M" ingest <scope> page1.csv page2.csv ... --jql '<scope JQL>' [--full]
 ```
 
-Pass `--full` only for a full pull: open items missing from it are treated as having left the scope.
+Pass every page of a sync to **one** `ingest` call (don't concatenate files). Pass `--full`
+only for a full pull: open items missing from it are treated as having left the scope.
 
 If `ingest` reports `missing_epics` (epics whose children are synced but the epic itself
 wasn't, typically because it was resolved before the window), fetch them with

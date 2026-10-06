@@ -16,7 +16,9 @@ claude -p "$question" \
   --plugin-dir . \
   --mcp-config tests/e2e/jira-mock.mcp.json --strict-mcp-config \
   --allowedTools Skill "Bash(uv run:*)" Write Read "mcp__jira__*" \
-  --max-budget-usd "${MAX_BUDGET_USD:-4}" </dev/null
+  --output-format stream-json --verbose \
+  --max-budget-usd "${MAX_BUDGET_USD:-4}" </dev/null >"$work/run.jsonl"
+python3 tests/e2e/summarise.py "$work/run.jsonl"
 
 echo
 uv run skills/forecast/scripts/mcmc.py stats PAY
