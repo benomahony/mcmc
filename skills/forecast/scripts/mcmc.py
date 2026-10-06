@@ -30,6 +30,7 @@ import math
 import os
 import random
 import sys
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -113,6 +114,18 @@ ALTER TABLE forecasts ADD COLUMN IF NOT EXISTS epic TEXT;
 def public(out: dict) -> dict:
     """Drop private keys (raw simulation samples etc.) before printing JSON."""
     return {k: v for k, v in out.items() if not k.startswith("_")}
+
+
+@contextmanager
+def transaction(con):
+    """All the writes inside happen, or none do."""
+    con.begin()
+    try:
+        yield
+    except BaseException:
+        con.rollback()
+        raise
+    con.commit()
 
 
 def default_db() -> Path:
@@ -233,51 +246,43 @@ def cmd_ingest(con, args) -> None:
     subtasks = sum(i["subtask"] for i in issues)
     if not args.include_subtasks:
         issues = [i for i in issues if not i["subtask"]]
-    now = args.as_of or datetime.now()
-    con.execute(
-        "INSERT INTO scopes VALUES (?, ?, ?, NULL, NULL) ON CONFLICT DO NOTHING", [args.scope, args.jql, now]
-    )
-    if args.jql:
-        con.execute("UPDATE scopes SET jql = ? WHERE name = ?", [args.jql, args.scope])
+    with transaction(con):
+        result = ingest(con, args.scope, issues, jql=args.jql, full=args.full, now=args.as_of or datetime.now())
+    print(json.dumps({"scope": args.scope, "ingested": len(issues),
+                      "skipped_subtasks": 0 if args.include_subtasks else subtasks} | result))
+
+
+def ingest(con, scope: str, issues: list[dict], *, jql: str | None, full: bool, now: datetime) -> dict:
+    """Upsert one sync's issues, record the sync, and snapshot the backlog. Call inside a transaction."""
+    con.execute("INSERT INTO scopes VALUES (?, ?, ?, NULL, NULL) ON CONFLICT DO NOTHING", [scope, jql, now])
+    if jql:
+        con.execute("UPDATE scopes SET jql = ? WHERE name = ?", [jql, scope])
     if issues:
         con.executemany(
             "INSERT OR REPLACE INTO issues "
             "(scope, key, issue_type, created, resolved, done, synced_at, epic, status_category) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
-                [args.scope, i["key"], i["issue_type"], i["created"], i["resolved"], i["done"], now, i["epic"],
+                [scope, i["key"], i["issue_type"], i["created"], i["resolved"], i["done"], now, i["epic"],
                  i["status_category"]]
                 for i in issues
             ],
         )
     removed = 0
-    if args.full:
+    if full:
         # A full sync returns every open item, so open items we didn't see have left the scope.
         seen = [i["key"] for i in issues]
         removed = con.execute(
-            "SELECT count(*) FROM issues WHERE scope = ? AND NOT done AND NOT list_contains(?, key)",
-            [args.scope, seen],
+            "SELECT count(*) FROM issues WHERE scope = ? AND NOT done AND NOT list_contains(?, key)", [scope, seen]
         ).fetchone()[0]
-        con.execute("DELETE FROM issues WHERE scope = ? AND NOT done AND NOT list_contains(?, key)", [args.scope, seen])
-        con.execute("UPDATE scopes SET last_full_sync = ? WHERE name = ?", [now, args.scope])
-    con.execute("UPDATE scopes SET last_sync = ? WHERE name = ?", [now, args.scope])
+        con.execute("DELETE FROM issues WHERE scope = ? AND NOT done AND NOT list_contains(?, key)", [scope, seen])
+        con.execute("UPDATE scopes SET last_full_sync = ? WHERE name = ?", [now, scope])
+    con.execute("UPDATE scopes SET last_sync = ? WHERE name = ?", [now, scope])
     open_items, done_items = con.execute(
-        "SELECT count(*) FILTER (NOT done), count(*) FILTER (done) FROM issues WHERE scope = ?", [args.scope]
+        "SELECT count(*) FILTER (NOT done), count(*) FILTER (done) FROM issues WHERE scope = ?", [scope]
     ).fetchone()
-    con.execute("INSERT INTO snapshots VALUES (?, ?, ?, ?)", [args.scope, now, open_items, done_items])
-    print(
-        json.dumps(
-            {
-                "scope": args.scope,
-                "ingested": len(issues),
-                "skipped_subtasks": 0 if args.include_subtasks else subtasks,
-                "removed": removed,
-                "open": open_items,
-                "done": done_items,
-                "missing_epics": missing_epics(con, args.scope),
-            }
-        )
-    )
+    con.execute("INSERT INTO snapshots VALUES (?, ?, ?, ?)", [scope, now, open_items, done_items])
+    return {"removed": removed, "open": open_items, "done": done_items, "missing_epics": missing_epics(con, scope)}
 
 
 def cmd_sync_info(con, args) -> None:
@@ -356,6 +361,11 @@ def open_keys(con, scope: str, types) -> list[str]:
 
 
 def record(con, scope, kind, growth, start, target, items, types, h_start, h_end, pct, keys=(), epic=None) -> int:
+    with transaction(con):
+        return _record(con, scope, kind, growth, start, target, items, types, h_start, h_end, pct, keys, epic)
+
+
+def _record(con, scope, kind, growth, start, target, items, types, h_start, h_end, pct, keys, epic) -> int:
     fid = con.execute(
         """INSERT INTO forecasts (scope, made_at, kind, scope_growth, start, target_date, items, types,
                                   history_start, history_end, percentiles, epic)
@@ -842,7 +852,10 @@ def aging_data(con, args) -> dict:
     by_type = {t: v for t, v in lead}
     overall = sorted(d for v in by_type.values() for d in v)
     if not overall:
-        sys.exit("error: no completed items in the window to compare against")
+        sys.exit(
+            "error: no items were completed in the history window, so there is nothing to compare open items "
+            "against; widen --window or sync more history (a full sync fetches the last 90 days)"
+        )
     items = con.execute(
         """SELECT key, issue_type, epic, coalesce(status_category, 'unknown'), ? - created AS age FROM issues
            WHERE scope = ? AND NOT done AND created IS NOT NULL AND coalesce(issue_type, '') <> 'Epic'
@@ -927,29 +940,46 @@ def cmd_report(con, args) -> None:
     now = datetime.now()
     root = reports_dir(args)
     # One file per run, never overwritten: reports/<scope>/<scope>-<date>-<time>.html
-    out = args.out or unused_path(root / args.scope / f"{args.scope}-{now:%Y-%m-%d-%H%M%S}.html")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(report.render(data))
+    html = report.render(data)
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(html)
+        out = args.out
+    else:
+        out = write_new(root / args.scope / f"{args.scope}-{now:%Y-%m-%d-%H%M%S}.html", html)
     fc = data["forecast"]
     h = fc["history"]
-    con.execute(
-        "INSERT INTO reports VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [args.scope, now, str(out.resolve()), h["end"], fc["items"], fc["percentiles"]["no_growth"]["p85"],
-         h["completed_per_week"] - h["created_per_week"] > 0.1 * h["completed_per_week"],
-         fc.get("target_date"), (fc.get("chance") or {}).get("no_growth")],
-    )
+    try:
+        con.execute(
+            "INSERT INTO reports VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [args.scope, now, str(out.resolve()), h["end"], fc["items"], fc["percentiles"]["no_growth"]["p85"],
+             h["completed_per_week"] - h["created_per_week"] > 0.1 * h["completed_per_week"],
+             fc.get("target_date"), (fc.get("chance") or {}).get("no_growth")],
+        )
+    except BaseException:
+        if not args.out:
+            out.unlink(missing_ok=True)  # an unrecorded report would never appear in the index
+        raise
     write_index(con, root)
     print(out)
 
 
-def unused_path(path: Path) -> Path:
-    """`path`, or `name-2.html`, `name-3.html`... if it's taken (two reports in the same second)."""
-    n = 1
-    candidate = path
-    while candidate.exists():
-        n += 1
-        candidate = path.with_stem(f"{path.stem}-{n}")
-    return candidate
+def write_new(path: Path, text: str) -> Path:
+    """Write `text` to a file that didn't exist before: `path`, else `name-2`, `name-3`...
+
+    Creating with mode "x" claims the name atomically, so two reports saved in the same
+    second (even by two processes) never overwrite each other.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for n in range(1, 1000):
+        candidate = path if n == 1 else path.with_stem(f"{path.stem}-{n}")
+        try:
+            with candidate.open("x") as fh:
+                fh.write(text)
+            return candidate
+        except FileExistsError:
+            continue
+    raise SystemExit(f"error: 999 reports named {path.stem} already exist; clear out {path.parent}")
 
 
 def reports_dir(args) -> Path:

@@ -1,8 +1,9 @@
 import json
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
+import duckdb
 import pytest
 
 import mcmc
@@ -309,10 +310,23 @@ def test_reports_are_kept_with_history_and_indexed(db, capsys, tmp_path):
     assert [Path(r["path"]) for r in json.loads(run(db, capsys, "reports", "--json"))["reports"]] == [first]
 
 
-def test_unused_path_never_overwrites(tmp_path):
+def test_write_new_never_overwrites(tmp_path):
     path = tmp_path / "PAY-2026-09-01-090000.html"
-    assert mcmc.unused_path(path) == path
-    path.write_text("x")
-    assert mcmc.unused_path(path).name == "PAY-2026-09-01-090000-2.html"
-    (tmp_path / "PAY-2026-09-01-090000-2.html").write_text("x")
-    assert mcmc.unused_path(path).name == "PAY-2026-09-01-090000-3.html"
+    first, second, third = (mcmc.write_new(path, text) for text in ("a", "b", "c"))
+    assert [p.name for p in (first, second, third)] == [
+        "PAY-2026-09-01-090000.html", "PAY-2026-09-01-090000-2.html", "PAY-2026-09-01-090000-3.html",
+    ]
+    assert [p.read_text() for p in (first, second, third)] == ["a", "b", "c"]
+
+
+def test_failed_ingest_leaves_nothing_half_written(db, capsys, tmp_path):
+    run(db, capsys, "ingest", "PAY", write(tmp_path, [jira_issue("PAY-1", START)]), "--full", "--jql", "project = PAY")
+    bad = mcmc.normalise(jira_issue("PAY-2", START)) | {"created": "not a date"}
+    con = mcmc.connect(db)
+    # The JQL update succeeds, then the issue insert fails: the update must be rolled back with it.
+    with pytest.raises(duckdb.Error), mcmc.transaction(con):
+        mcmc.ingest(con, "PAY", [bad], jql="project = OTHER", full=True, now=datetime(2026, 9, 1))
+    assert con.execute("SELECT jql FROM scopes").fetchall() == [("project = PAY",)]
+    assert con.execute("SELECT key FROM issues").fetchall() == [("PAY-1",)]
+    assert con.execute("SELECT count(*) FROM snapshots").fetchone()[0] == 1
+    con.close()
