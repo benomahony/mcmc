@@ -79,7 +79,9 @@ def test_incremental_upsert_and_full_sync_removes_departed(db, capsys, tmp_path)
     out = json.loads(run(db, capsys, "ingest", "PAY", write(tmp_path, [jira_issue("PAY-1", START, START + timedelta(3))])))
     assert (out["open"], out["done"]) == (1, 1)
     out = json.loads(run(db, capsys, "ingest", "PAY", write(tmp_path, []), "--full"))
-    assert out == {"scope": "PAY", "ingested": 0, "skipped_subtasks": 0, "removed": 1, "open": 0, "done": 1}
+    assert out == {
+        "scope": "PAY", "ingested": 0, "skipped_subtasks": 0, "removed": 1, "open": 0, "done": 1, "missing_epics": [],
+    }
 
 
 def seed_steady(db, capsys, tmp_path, days=60, open_items=20):
@@ -174,8 +176,11 @@ def test_epics_forecast_current_pace_vs_sole_focus(db, capsys, tmp_path):
     run(db, capsys, "ingest", "PAY", str(path), "--full")
     set_last_sync(db, end)
 
+    assert json.loads(run(db, capsys, "sync-info", "PAY"))["missing_epics"] == ["E-2"]
+
     out = json.loads(run(db, capsys, "epics", "PAY", "--window", "60", "--seed", "1", "--json"))
     e1, e2 = out["epics"]
+    assert (e1["status"], e2["status"]) == ("open", "not synced")
     assert (e1["epic"], e1["open"], e1["completed_in_window"]) == ("E-1", 6, 15)
     assert e1["sole_focus"]["p85"] == (end + timedelta(3)).isoformat()  # 2/day team throughput
     assert e1["current_pace"]["p85"] > (end + timedelta(20)).isoformat()  # ~0.25/day own pace

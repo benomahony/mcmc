@@ -172,6 +172,18 @@ def load_issues(raw: str, epic_field: str | None = None) -> list[dict]:
     return [normalise(i, epic_field) for i in data]
 
 
+def missing_epics(con, scope: str) -> list[str]:
+    """Epics referenced by synced issues whose own issue isn't synced (e.g. resolved before the window)."""
+    return [
+        r[0]
+        for r in con.execute(
+            """SELECT DISTINCT epic FROM issues WHERE scope = ? AND epic IS NOT NULL
+               AND epic NOT IN (SELECT key FROM issues WHERE scope = ?) ORDER BY epic""",
+            [scope, scope],
+        ).fetchall()
+    ]
+
+
 def cmd_ingest(con, args) -> None:
     issues = load_issues(Path(args.file).read_text() if args.file != "-" else sys.stdin.read(), args.epic_field)
     subtasks = sum(i["subtask"] for i in issues)
@@ -216,6 +228,7 @@ def cmd_ingest(con, args) -> None:
                 "removed": removed,
                 "open": open_items,
                 "done": done_items,
+                "missing_epics": missing_epics(con, args.scope),
             }
         )
     )
@@ -240,6 +253,7 @@ def cmd_sync_info(con, args) -> None:
                 "last_full_sync": row[2].isoformat() if row and row[2] else None,
                 "mode": mode,
                 "updated_since": since,
+                "missing_epics": missing_epics(con, args.scope),
             }
         )
     )

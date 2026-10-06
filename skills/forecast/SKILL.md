@@ -65,6 +65,10 @@ uv run "$M" ingest <scope> issues.csv --jql '<scope JQL>' [--full]
 
 Pass `--full` only for a full pull: open items missing from it are treated as having left the scope.
 
+If `ingest` reports `missing_epics` (epics whose children are synced but the epic itself
+wasn't, typically because it was resolved before the window), fetch them with
+`key in (<keys>)`, same fields, and `ingest` them too (without `--full`).
+
 ## 3. Forecast
 
 ```bash

@@ -74,7 +74,14 @@ def test_full_then_incremental_sync_and_forecast(jira, tmp_path, capsys):
     )
     assert forecast["items"] == out["open"] - open_epics
 
+    # Epics resolved before the window aren't in the full pull; fetch them by key.
+    assert out["missing_epics"]
+    epic_issues = search(jira, f"key in ({', '.join(out['missing_epics'])})")
+    out = ingest(db, capsys, tmp_path, epic_issues)
+    assert out["missing_epics"] == []
+
     epics = cli(db, capsys, "epics", "PAY", "--seed", "1", "--runs", "500", "--json")["epics"]
+    assert all(e["status"] != "not synced" for e in epics)
     linked = {i["fields"].get("customfield_10008") for i in full} - {None}
     assert {e["epic"] for e in epics} <= linked and epics
     for e in epics:
@@ -100,7 +107,7 @@ def test_full_then_incremental_sync_and_forecast(jira, tmp_path, capsys):
     assert (out2["open"], out2["done"]) == (out["open"] - 3, out["done"] + 3)
 
     stats = cli(db, capsys, "stats", "PAY", "--json")
-    assert len(stats["snapshots"]) == 2
+    assert len(stats["snapshots"]) == 3  # full sync, epic backfill, incremental
     assert sum(t["completed"] for t in stats["by_type"]) > 0
 
     # Closing items can finish an epic outright; its recorded forecast then resolves (and
