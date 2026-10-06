@@ -308,11 +308,16 @@ def cmd_sync_info(con, args) -> None:
 # --- forecast ---------------------------------------------------------------
 
 
-def _type_filter(types: list[str] | None) -> tuple[str, list]:
-    # Epics are containers, not deliverable items: excluded unless asked for by type.
-    if types:
-        return "AND issue_type IN (SELECT unnest(?))", [types]
-    return "AND coalesce(issue_type, '') <> 'Epic'", []
+# Every query below is fixed text with bound parameters. Optional filters bind NULL to switch
+# themselves off, e.g. the type filter: with no types given, epics (containers, not deliverable
+# items) are excluded; otherwise only the listed types count. Bind it with `types_param`.
+#   (CASE WHEN ?::TEXT[] IS NULL THEN coalesce(issue_type, '') <> 'Epic'
+#         ELSE list_contains(?::TEXT[], issue_type) END)
+
+
+def types_param(types: list[str] | None) -> list:
+    """The two bindings for the type filter above."""
+    return [types or None, types or None]
 
 
 def history_window(con, scope: str, window: int, end: date | None) -> tuple[date, date]:
@@ -324,20 +329,30 @@ def history_window(con, scope: str, window: int, end: date | None) -> tuple[date
     return end - timedelta(days=window - 1), end
 
 
+DAILY_SERIES = {
+    "resolved": """SELECT resolved FROM issues WHERE scope = ? AND resolved IS NOT NULL
+                   AND (CASE WHEN ?::TEXT[] IS NULL THEN coalesce(issue_type, '') <> 'Epic'
+                             ELSE list_contains(?::TEXT[], issue_type) END)""",
+    "created": """SELECT created FROM issues WHERE scope = ? AND created IS NOT NULL
+                  AND (CASE WHEN ?::TEXT[] IS NULL THEN coalesce(issue_type, '') <> 'Epic'
+                            ELSE list_contains(?::TEXT[], issue_type) END)""",
+}
+
+
 def daily_series(con, scope: str, column: str, start: date, end: date, types) -> list[int]:
-    sql, params = _type_filter(types)
-    dates = [
-        r[0]
-        for r in con.execute(
-            f"SELECT {column} FROM issues WHERE scope = ? AND {column} IS NOT NULL {sql}", [scope, *params]
-        ).fetchall()
-    ]
+    """Per-day counts of issues `resolved` (throughput) or `created` (arrivals) in the window."""
+    dates = [r[0] for r in con.execute(DAILY_SERIES[column], [scope, *types_param(types)]).fetchall()]
     return daily_throughput(dates, start, end)
 
 
 def open_keys(con, scope: str, types) -> list[str]:
-    sql, params = _type_filter(types)
-    return [r[0] for r in con.execute(f"SELECT key FROM issues WHERE scope = ? AND NOT done {sql}", [scope, *params]).fetchall()]
+    rows = con.execute(
+        """SELECT key FROM issues WHERE scope = ? AND NOT done
+           AND (CASE WHEN ?::TEXT[] IS NULL THEN coalesce(issue_type, '') <> 'Epic'
+                     ELSE list_contains(?::TEXT[], issue_type) END)""",
+        [scope, *types_param(types)],
+    ).fetchall()
+    return [r[0] for r in rows]
 
 
 def record(con, scope, kind, growth, start, target, items, types, h_start, h_end, pct, keys=(), epic=None) -> int:
@@ -483,17 +498,17 @@ def epics_data(con, args) -> dict:
     h_start, h_end = history_window(con, args.scope, args.window, args.history_end)
     start = args.start or h_end
     rng = random.Random(args.seed)
-    epic_sql, epic_params = ("AND epic IN (SELECT unnest(?))", [args.epic]) if args.epic else ("", [])
     rows = con.execute(
-        f"""
+        """
         SELECT epic, list(key ORDER BY key) FILTER (NOT done) AS open_keys
         FROM issues
-        WHERE scope = ? AND epic IS NOT NULL AND coalesce(issue_type, '') <> 'Epic' {epic_sql}
+        WHERE scope = ? AND epic IS NOT NULL AND coalesce(issue_type, '') <> 'Epic'
+          AND (?::TEXT[] IS NULL OR list_contains(?::TEXT[], epic))
         GROUP BY epic
         HAVING count(*) FILTER (NOT done) > 0
             OR epic IN (SELECT key FROM issues WHERE scope = ? AND issue_type = 'Epic' AND NOT done)
         ORDER BY epic""",
-        [args.scope, *epic_params, args.scope],
+        [args.scope, args.epic or None, args.epic or None, args.scope],
     ).fetchall()
     team = daily_series(con, args.scope, "resolved", h_start, h_end, None)
     unparented_open = con.execute(
@@ -627,16 +642,19 @@ def actual_when(con, f: dict) -> date | None:
     """Date the forecast's backlog was cleared, or None if not (yet) known."""
     if f["scope_growth"]:
         # Backlog zero: a day on/after start where every in-scope item created by then is resolved by then.
-        sql, params = _type_filter(f["types"])
         row = con.execute(
-            f"""
-            WITH s AS (SELECT * FROM issues WHERE scope = ? {sql}),
+            """
+            WITH s AS (
+                SELECT * FROM issues WHERE scope = ?
+                AND (CASE WHEN ?::TEXT[] IS NULL THEN coalesce(issue_type, '') <> 'Epic'
+                          ELSE list_contains(?::TEXT[], issue_type) END)
+            ),
             candidates AS (SELECT DISTINCT resolved AS d FROM s WHERE resolved > ?)
             SELECT min(d) FROM candidates
             WHERE NOT EXISTS (
                 SELECT 1 FROM s WHERE created <= d AND (resolved IS NULL OR resolved > d) AND NOT (done AND resolved IS NULL)
             )""",
-            [f["scope"], *params, f["start"]],
+            [f["scope"], *types_param(f["types"]), f["start"]],
         ).fetchone()
         return row[0]
     row = con.execute(
@@ -650,10 +668,11 @@ def actual_when(con, f: dict) -> date | None:
 
 
 def actual_how_many(con, f: dict) -> int:
-    sql, params = _type_filter(f["types"])
     return con.execute(
-        f"SELECT count(*) FROM issues WHERE scope = ? AND resolved > ? AND resolved <= ? {sql}",
-        [f["scope"], f["start"], f["target_date"], *params],
+        """SELECT count(*) FROM issues WHERE scope = ? AND resolved > ? AND resolved <= ?
+           AND (CASE WHEN ?::TEXT[] IS NULL THEN coalesce(issue_type, '') <> 'Epic'
+                     ELSE list_contains(?::TEXT[], issue_type) END)""",
+        [f["scope"], f["start"], f["target_date"], *types_param(f["types"])],
     ).fetchone()[0]
 
 
@@ -683,10 +702,10 @@ def evaluate(con, f: dict, synced_to: date) -> dict:
 
 
 def calibrate_data(con, args) -> dict:
-    where, params = ("WHERE f.scope = ?", [args.scope]) if args.scope else ("", [])
     rows = con.execute(
-        f"""SELECT f.*, s.last_sync FROM forecasts f JOIN scopes s ON s.name = f.scope {where} ORDER BY f.id""",
-        params,
+        """SELECT f.*, s.last_sync FROM forecasts f JOIN scopes s ON s.name = f.scope
+           WHERE ?::TEXT IS NULL OR f.scope = ? ORDER BY f.id""",
+        [args.scope, args.scope],
     )
     cols = [c[0] for c in rows.description]
     forecasts = [dict(zip(cols, r)) for r in rows.fetchall()]
@@ -938,8 +957,9 @@ def reports_dir(args) -> Path:
 
 
 def saved_reports(con, scope: str | None = None) -> list[dict]:
-    where, params = ("WHERE scope = ?", [scope]) if scope else ("", [])
-    rows = con.execute(f"SELECT * FROM reports {where} ORDER BY created_at DESC", params)
+    rows = con.execute(
+        "SELECT * FROM reports WHERE ?::TEXT IS NULL OR scope = ? ORDER BY created_at DESC", [scope, scope]
+    )
     cols = [c[0] for c in rows.description]
     return [dict(zip(cols, r)) for r in rows.fetchall() if Path(r[2]).exists()]
 
