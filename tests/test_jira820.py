@@ -41,7 +41,7 @@ def cli(db, capsys, *argv):
     return json.loads(capsys.readouterr().out)
 
 
-def ingest(db, capsys, tmp_path, issues, *flags):
+def ingest_pages(db, capsys, tmp_path, issues, *flags):
     path = tmp_path / "issues.json"
     path.write_text(json.dumps(issues))
     return cli(db, capsys, "ingest", "PAY", str(path), "--jql", "project = PAY", "--epic-field", "customfield_10008", *flags)
@@ -57,7 +57,7 @@ def test_full_then_incremental_sync_and_forecast(jira, tmp_path, capsys):
     assert cli(db, capsys, "sync-info", "PAY")["mode"] == "full"
 
     full = search(jira, "project = PAY AND (statusCategory != Done OR resolved >= -90d)", page_size=37)
-    out = ingest(db, capsys, tmp_path, full, "--full")
+    out = ingest_pages(db, capsys, tmp_path, full, "--full")
     # jira820 ignores `subTaskIssueTypes()`, so ingest has to drop sub-tasks itself.
     subtasks = sum(i["fields"]["issuetype"]["subtask"] for i in full)
     assert out["skipped_subtasks"] == subtasks > 0
@@ -77,7 +77,7 @@ def test_full_then_incremental_sync_and_forecast(jira, tmp_path, capsys):
     # Epics resolved before the window aren't in the full pull; fetch them by key.
     assert out["missing_epics"]
     epic_issues = search(jira, f"key in ({', '.join(out['missing_epics'])})")
-    out = ingest(db, capsys, tmp_path, epic_issues)
+    out = ingest_pages(db, capsys, tmp_path, epic_issues)
     assert out["missing_epics"] == []
 
     epics = cli(db, capsys, "epics", "PAY", "--seed", "1", "--runs", "500", "--json")["epics"]
@@ -103,7 +103,7 @@ def test_full_then_incremental_sync_and_forecast(jira, tmp_path, capsys):
     assert info["mode"] == "incremental"
     changed = search(jira, f'{info["jql"]} AND updated >= "{info["updated_since"]}"')
     assert set(open_keys) <= {i["key"] for i in changed}
-    out2 = ingest(db, capsys, tmp_path, changed)
+    out2 = ingest_pages(db, capsys, tmp_path, changed)
     assert (out2["open"], out2["done"]) == (out["open"] - 3, out["done"] + 3)
 
     stats = cli(db, capsys, "stats", "PAY", "--json")

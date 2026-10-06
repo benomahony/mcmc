@@ -6,7 +6,9 @@ from pathlib import Path
 import duckdb
 import pytest
 
+import jira_input
 import mcmc
+import store
 
 START = date(2026, 7, 1)
 
@@ -41,11 +43,11 @@ def jira_issue(key, created, resolved=None, kind="Story"):
 
 
 def test_normalise_accepts_jira_and_flat_shapes():
-    assert mcmc.normalise(jira_issue("A-1", "2026-07-01", "2026-07-05")) == {
+    assert jira_input.normalise(jira_issue("A-1", "2026-07-01", "2026-07-05")) == {
         "key": "A-1", "issue_type": "Story", "created": date(2026, 7, 1), "resolved": date(2026, 7, 5), "done": True,
         "subtask": False, "epic": None, "status_category": "done",
     }
-    flat = mcmc.normalise({"key": "A-2", "type": "Bug", "created": "2026-07-01", "status_category": "In Progress"})
+    flat = jira_input.normalise({"key": "A-2", "type": "Bug", "created": "2026-07-01", "status_category": "In Progress"})
     assert flat["done"] is False and flat["issue_type"] == "Bug" and flat["status_category"] == "in_progress"
 
 
@@ -153,11 +155,11 @@ def test_stats_reports_lead_time_by_type(db, capsys, tmp_path):
 def test_epic_link_from_cloud_parent_or_custom_field():
     cloud = jira_issue("A-1", "2026-07-01")
     cloud["fields"]["parent"] = {"key": "A-100", "fields": {"issuetype": {"name": "Epic"}}}
-    assert mcmc.normalise(cloud)["epic"] == "A-100"
+    assert jira_input.normalise(cloud)["epic"] == "A-100"
     dc = jira_issue("A-2", "2026-07-01")
     dc["fields"]["customfield_10008"] = "A-200"
-    assert mcmc.normalise(dc, "customfield_10008")["epic"] == "A-200"
-    assert mcmc.normalise(dc)["epic"] is None
+    assert jira_input.normalise(dc, "customfield_10008")["epic"] == "A-200"
+    assert jira_input.normalise(dc)["epic"] is None
 
 
 def test_epics_forecast_current_pace_vs_sole_focus(db, capsys, tmp_path):
@@ -321,11 +323,11 @@ def test_write_new_never_overwrites(tmp_path):
 
 def test_failed_ingest_leaves_nothing_half_written(db, capsys, tmp_path):
     run(db, capsys, "ingest", "PAY", write(tmp_path, [jira_issue("PAY-1", START)]), "--full", "--jql", "project = PAY")
-    bad = mcmc.normalise(jira_issue("PAY-2", START)) | {"created": "not a date"}
-    con = mcmc.connect(db)
+    bad = jira_input.normalise(jira_issue("PAY-2", START)) | {"created": "not a date"}
+    con = store.connect(db)
     # The JQL update succeeds, then the issue insert fails: the update must be rolled back with it.
-    with pytest.raises(duckdb.Error), mcmc.transaction(con):
-        mcmc.ingest(con, "PAY", [bad], jql="project = OTHER", full=True, now=datetime(2026, 9, 1))
+    with pytest.raises(duckdb.Error), store.transaction(con):
+        store.ingest(con, store.Sync("PAY", datetime(2026, 9, 1), full=True, jql="project = OTHER"), [bad])
     assert con.execute("SELECT jql FROM scopes").fetchall() == [("project = PAY",)]
     assert con.execute("SELECT key FROM issues").fetchall() == [("PAY-1",)]
     assert con.execute("SELECT count(*) FROM snapshots").fetchall() == [(1,)]
