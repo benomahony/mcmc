@@ -337,3 +337,15 @@ def test_failed_ingest_leaves_nothing_half_written(db, capsys, tmp_path):
     assert con.execute("SELECT key FROM issues").fetchall() == [("PAY-1",)]
     assert con.execute("SELECT count(*) FROM snapshots").fetchall() == [(1,)]
     con.close()
+
+
+def test_history_before_the_first_completion_is_not_counted_as_empty_days(db, capsys, tmp_path):
+    # An export with 30 days of completions (1 a day) but the default 90-day window.
+    end = START + timedelta(29)
+    issues = [jira_issue(f"S-{i}", START, START + timedelta(i)) for i in range(30)]
+    issues += [jira_issue(f"O-{i}", START) for i in range(10)]
+    run(db, capsys, "ingest", "PAY", write(tmp_path, issues), "--full", "--as-of", str(end))
+    out = json.loads(run(db, capsys, "forecast", "PAY", "--seed", "1", "--no-record", "--json"))
+    assert out["history"]["days"] == 30, f"history should start at the first completion, got {out['history']}"
+    assert out["history"]["completed_per_week"] == 7.0, f"1 a day is 7 a week, got {out['history']}"
+    assert out["percentiles"]["p85"] == (end + timedelta(10)).isoformat(), f"10 items at 1/day, got {out['percentiles']}"

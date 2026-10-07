@@ -326,6 +326,14 @@ def scope_info(con: Connection, scope: str) -> tuple[str | None, datetime | None
     return jql, last
 
 
+def first_completion(con: Connection, scope: str) -> date | None:
+    """The earliest resolution date held for the scope: history before it is unknown, not empty."""
+    (first,) = one(con, 'SELECT min(resolved) AS "first [DATE]" FROM issues WHERE scope = ?', [scope])
+    assert first is None or isinstance(first, date), f"first resolution {first!r} is not a date"
+    assert first is None or first <= date.today(), f"first resolution {first} is in the future"
+    return first
+
+
 def last_days(con: Connection, scope: str, days: int, end: date | None = None) -> Window:
     """The last `days` days of history, ending at `end` or the last sync."""
     assert days >= 1, f"a history window needs at least one day, got {days}"

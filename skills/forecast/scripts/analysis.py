@@ -43,7 +43,11 @@ def window_for(con: Connection, scope: str, days: int, end: date | None = None) 
         window = store.last_days(con, scope, days, end)
     except store.NoData:
         raise UserError(f"no data for scope {scope!r}; run `ingest {scope} <file>` first") from None
-    assert window.days == days, f"{window.days}-day window for --window {days}"
+    # Don't count days before the data starts as zero-throughput days: they're unknown.
+    first = store.first_completion(con, scope)
+    if first is not None and window.start < first <= window.end:
+        window = Window(first, window.end)
+    assert window.days <= days, f"{window.days}-day window for --window {days}"
     assert end is None or window.end == end, f"window ends {window.end}, asked for {end}"
     return window
 

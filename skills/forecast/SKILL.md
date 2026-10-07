@@ -12,8 +12,12 @@ every sync, and every forecast is recorded for later calibration.
 The CLI (plain `python3`, no dependencies; `--help` on any subcommand lists flags):
 
 ```bash
-M="${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/mcmc.py"
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/mcmc.py" <subcommand> ...
 ```
+
+Run it exactly like that, one plain command per call: no shell variables, `cd` or `&&`
+chains. That way a single `Bash(python3:*)` permission covers every step and the user
+isn't prompted at each one.
 
 ## 0. Health check
 
@@ -39,7 +43,7 @@ Get (ask only for what is missing):
 ## 2. Sync from Jira
 
 ```bash
-python3 "$M" sync-info <scope>
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/mcmc.py" sync-info <scope>
 ```
 
 returns `mode` (`full` or `incremental`), `updated_since`, and the stored `jql`. Then query
@@ -71,7 +75,7 @@ Sub-tasks are dropped automatically. Epic links only arrive with a **full** sync
 that haven't changed, so if `epics` reports none, do a full sync. Then:
 
 ```bash
-python3 "$M" ingest <scope> page1.csv page2.csv ... --jql '<scope JQL>' [--full]
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/mcmc.py" ingest <scope> page1.csv page2.csv ... --jql '<scope JQL>' [--full]
 ```
 
 Pass every page of a sync to **one** `ingest` call (don't concatenate files). Pass `--full`
@@ -84,18 +88,18 @@ wasn't, typically because it was resolved before the window), fetch them with
 ## 3. Forecast
 
 ```bash
-python3 "$M" forecast <scope> [--type Story]...        # when will the open backlog be done?
-python3 "$M" forecast <scope> --items 42               # when will N items be done?
-python3 "$M" forecast <scope> --by 2026-12-18          # how many by a date?
-python3 "$M" forecast <scope> --target-date 2026-12-01 # ...plus the chance of being done by a date
-python3 "$M" forecast <scope> --by 2026-12-18 --at-least 40   # chance of finishing at least N by a date
-python3 "$M" epics <scope> [--epic PAY-123]...         # when will each open epic be done?
-python3 "$M" epics <scope> --order PAY-98,PAY-123 [--wip 2]   # ...if worked in this priority order
-python3 "$M" stats <scope>                             # weekly finished/created, lead time by type, snapshots
-python3 "$M" aging <scope> [--all]                     # open items older than their type's p85/p95 lead time
-python3 "$M" report <scope> [--order ...] [--target-date ...]  # everything above as one HTML page; prints its path
-python3 "$M" reports [<scope>]                         # saved reports, newest first, + the index page
-python3 "$M" calibrate [<scope>]                       # how past forecasts held up
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/mcmc.py" forecast <scope> [--type Story]...        # when will the open backlog be done?
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/mcmc.py" forecast <scope> --items 42               # when will N items be done?
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/mcmc.py" forecast <scope> --by 2026-12-18          # how many by a date?
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/mcmc.py" forecast <scope> --target-date 2026-12-01 # ...plus the chance of being done by a date
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/mcmc.py" forecast <scope> --by 2026-12-18 --at-least 40   # chance of finishing at least N by a date
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/mcmc.py" epics <scope> [--epic PAY-123]...         # when will each open epic be done?
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/mcmc.py" epics <scope> --order PAY-98,PAY-123 [--wip 2]   # ...if worked in this priority order
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/mcmc.py" stats <scope>                             # weekly finished/created, lead time by type, snapshots
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/mcmc.py" aging <scope> [--all]                     # open items older than their type's p85/p95 lead time
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/mcmc.py" report <scope> [--order ...] [--target-date ...]  # everything above as one HTML page; prints its path
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/mcmc.py" reports [<scope>]                         # saved reports, newest first, + the index page
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/forecast/scripts/mcmc.py" calibrate [<scope>]                       # how past forecasts held up
 ```
 
 `forecast` defaults the remaining count to open items in the DB and forecasts **today's
