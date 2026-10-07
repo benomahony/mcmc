@@ -10,10 +10,9 @@ from datetime import date, timedelta
 import pytest
 
 jira820 = pytest.importorskip("jira820.server")
-from fastapi.testclient import TestClient  # noqa: E402
-from jira820.config import Config  # noqa: E402
-
-import mcmc  # noqa: E402
+import mcmc
+from fastapi.testclient import TestClient
+from jira820.config import Config
 
 FIELDS = "issuetype,created,resolutiondate,status,customfield_10008"  # Epic Link on DC
 

@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --group dev
+      - run: uv run ruff check skills tests
+      - run: uv run pyright
+      - run: uv run pytest -q
+
+  python39:
+    # The scripts run on whatever python3 is installed; stock macOS ships 3.9.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uvx --python 3.9 --with pytest --with hypothesis pytest -q tests/test_forecast.py tests/test_mcmc.py

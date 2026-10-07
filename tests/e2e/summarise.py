@@ -2,8 +2,9 @@
 
 import json
 import sys
+from pathlib import Path
 
-for line in open(sys.argv[1]):
+for line in Path(sys.argv[1]).read_text().splitlines():
     try:
         m = json.loads(line)
     except json.JSONDecodeError:

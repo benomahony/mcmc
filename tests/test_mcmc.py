@@ -4,10 +4,9 @@ import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-import pytest
-
 import jira_input
 import mcmc
+import pytest
 import store
 
 START = date(2026, 7, 1)
@@ -238,7 +237,8 @@ def test_aging_flags_items_older_than_their_type_lead_time(db, capsys, tmp_path)
 def test_chance_of_hitting_target_date_and_count(db, capsys, tmp_path):
     seed_steady(db, capsys, tmp_path)  # Stories: exactly 1/day; 20 open Stories
     end = START + timedelta(60)
-    f = lambda *a: json.loads(run(db, capsys, "forecast", "PAY", "--type", "Story", "--window", "60", "--no-record", "--json", *a))
+    def f(*a):
+        return json.loads(run(db, capsys, "forecast", "PAY", "--type", "Story", "--window", "60", "--no-record", "--json", *a))
     assert f("--target-date", str(end + timedelta(20)))["chance"] == 1.0
     assert f("--target-date", str(end + timedelta(19)))["chance"] == 0.0
     assert f("--by", str(end + timedelta(10)), "--at-least", "10")["chance"] == 1.0
@@ -255,10 +255,11 @@ def test_epics_chance_by_target_date(db, capsys, tmp_path):
     path.write_text("\n".join(rows))
     end = START + timedelta(59)
     run(db, capsys, "ingest", "PAY", str(path), "--full", "--as-of", str(end))
-    e = lambda days: json.loads(
-        run(db, capsys, "epics", "PAY", "--window", "60", "--order", "E-1", "--epic-share", "1",
-            "--target-date", str(end + timedelta(days)), "--no-record", "--json")
-    )["epics"][0]["chance"]
+    def e(days):
+        return json.loads(
+            run(db, capsys, "epics", "PAY", "--window", "60", "--order", "E-1", "--epic-share", "1",
+                "--target-date", str(end + timedelta(days)), "--no-record", "--json")
+        )["epics"][0]["chance"]
     assert e(5) == {"current_pace": 1.0, "sole_focus": 1.0, "priority": 1.0}
     assert e(4) == {"current_pace": 0.0, "sole_focus": 0.0, "priority": 0.0}
 

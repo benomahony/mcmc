@@ -25,13 +25,14 @@ from datetime import date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-import analysis  # noqa: E402
-import jira_input  # noqa: E402
-import report  # noqa: E402
-import store  # noqa: E402
-from analysis import MIN_TYPE_SAMPLE, UserError  # noqa: E402
-from forecast import PERCENTILES, histogram  # noqa: E402
-from store import Connection  # noqa: E402
+import analysis
+import jira_input
+import report
+import store
+from analysis import MIN_TYPE_SAMPLE, UserError
+from forecast import PERCENTILES, histogram
+from store import Connection
+
 
 def public(out: dict) -> dict:
     """Drop private keys (raw simulation samples etc.) before printing JSON."""

@@ -24,3 +24,9 @@ include = ["skills/forecast/scripts", "tests"]
 extraPaths = ["skills/forecast/scripts"]
 pythonVersion = "3.9"  # the scripts run on stock macOS python3
 typeCheckingMode = "standard"
+
+[tool.ruff]
+target-version = "py39"  # the scripts run on stock macOS python3
+
+[tool.ruff.lint]
+ignore = ["DTZ"]  # dates are deliberately local: Jira dates and "today" are the user's day
