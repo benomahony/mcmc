@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Jira history store + Monte Carlo forecasts with scope growth and calibration.
+"""Jira history store + Monte Carlo forecasts with calibration.
 
 Subcommands:
   sync-info SCOPE        what to fetch next (full or incremental, and since when)
@@ -7,7 +7,7 @@ Subcommands:
   forecast SCOPE         simulate from stored history and record the forecast
   epics SCOPE            per-epic forecasts: at current pace, and if it had the team's sole focus
   calibrate [SCOPE]      score past forecasts against what actually happened
-  stats SCOPE            weekly throughput/arrivals, lead time, backlog snapshots
+  stats SCOPE            weekly finished/created, lead time, backlog snapshots
   aging SCOPE            open items older than their type's usual lead time
   report SCOPE           all of the above as one self-contained HTML page, kept in reports/
   reports [SCOPE]        list saved reports (newest first) and the index page
@@ -108,19 +108,16 @@ def print_how_many(out: dict, args: argparse.Namespace) -> None:
 
 
 def print_when(out: dict, args: argparse.Namespace) -> None:
-    names = list(out["percentiles"])
-    assert names, "a when forecast needs at least one model"
+    pct = out["percentiles"]
+    assert set(pct) == {f"p{p}" for p in PERCENTILES}, f"the table prints every percentile {PERCENTILES}, got {sorted(pct)}"
     assert out["kind"] == "when", f"not a when forecast: {out['kind']}"
-    print(f"\nWhen will {out['items']} items be done (from {out['start']})?")
-    print("  conf  " + "".join(f"{n:>14}" for n in names))
+    print(f"\nWhen will today's {out['items']} items be done (from {out['start']}), if nothing new is added?")
     for p in PERCENTILES:
-        row = [out["percentiles"][n][f"p{p}"] or f">{args.max_days}d" for n in names]
-        print(f"  {p:>3}%  " + "".join(f"{v:>14}" for v in row))
-    for n in names:
-        if "chance" in out:
-            print(f"  chance by {args.target_date}, {n}: {out['chance'][n]:.0%}")
-        if out["finished_within_limit"][n] < 1:
-            print(f"  {n}: only {out['finished_within_limit'][n]:.0%} of runs finished within {args.max_days} days")
+        print(f"  {p}% confidence: {pct[f'p{p}'] or f'more than {args.max_days} days'}")
+    if "chance" in out:
+        print(f"  Chance of being done by {args.target_date}: {out['chance']:.0%}")
+    if out["finished_within_limit"] < 1:
+        print(f"  only {out['finished_within_limit']:.0%} of runs finished within {args.max_days} days")
 
 
 def cmd_forecast(con: Connection, args: argparse.Namespace) -> None:
@@ -294,7 +291,7 @@ def report_data(con: Connection, args: argparse.Namespace) -> dict:
         "jql": jql,
         "last_sync": last_sync.isoformat() if last_sync else None,
         "forecast": analysis.forecast_data(con, argparse.Namespace(
-            **common, type=None, by=None, items=None, at_least=None, no_scope_growth=True)),
+            **common, type=None, by=None, items=None, at_least=None)),
         "epics": analysis.epics_data(con, argparse.Namespace(
             **common, epic=None, order=args.order, wip=args.wip, epic_share=args.epic_share)),
         "aging": analysis.aging_data(con, argparse.Namespace(scope=args.scope, window=args.window, all=True)),
@@ -302,7 +299,7 @@ def report_data(con: Connection, args: argparse.Namespace) -> dict:
         "calibrate": analysis.calibrate_data(con, argparse.Namespace(scope=args.scope)),
     }
     assert data["forecast"]["kind"] == "when", "the report forecasts when the backlog will be done"
-    assert "scope_growth" not in data["forecast"]["percentiles"], "the report shows the frozen-scope forecast only"
+    assert "p85" in data["forecast"]["percentiles"], "the report leads with the 85% date"
     return data
 
 
@@ -349,9 +346,9 @@ def headline(scope: str, path: Path, data: dict, now: datetime) -> dict:
     h = fc["history"]
     row = {
         "scope": scope, "created_at": now, "path": str(path.resolve()), "as_of": h["end"], "open_items": fc["items"],
-        "p85": fc["percentiles"]["no_growth"]["p85"],
+        "p85": fc["percentiles"]["p85"],
         "shrinking": h["completed_per_week"] - h["created_per_week"] > 0.1 * h["completed_per_week"],
-        "target_date": fc.get("target_date"), "chance": (fc.get("chance") or {}).get("no_growth"),
+        "target_date": fc.get("target_date"), "chance": fc.get("chance"),
     }
     assert row["open_items"] > 0, f"a report forecasts {row['open_items']} open items"
     assert row["chance"] is None or 0 <= row["chance"] <= 1, f"chance {row['chance']} outside 0..1"
@@ -441,7 +438,6 @@ def add_forecast_commands(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--target-date", type=date.fromisoformat, help="when-forecasts: also give the chance of finishing by this date")
     p.add_argument("--at-least", type=int, help="with --by: also give the chance of finishing at least this many")
     p.add_argument("--type", action="append", help="restrict to issue type (repeatable)")
-    p.add_argument("--no-scope-growth", action="store_true", help="skip the scope-growth model")
     p = sub.add_parser("epics", help="per-epic forecasts (current pace vs sole focus)")
     add_simulation_options(p)
     p.add_argument("--epic", action="append", help="only these epic keys (repeatable)")

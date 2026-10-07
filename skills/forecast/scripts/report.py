@@ -73,7 +73,7 @@ class Facts:
     @property
     def p85(self) -> str | None:
         """The headline: the 85% finish date if nothing new is added."""
-        pcts = self.forecast["percentiles"]["no_growth"]
+        pcts = self.forecast["percentiles"]
         assert "p85" in pcts, f"forecast has no 85% answer: {sorted(pcts)}"
         assert set(pcts) >= {f"p{p}" for p in PERCENT_POINTS}, f"forecast percentiles {sorted(pcts)}"
         return pcts["p85"]
@@ -138,8 +138,8 @@ def backlog_bullet(f: Facts) -> str:
                 f"If nothing new were added, the {items} open items would be done by <b>{when}</b> (85% confidence).")
     else:
         text = (f"<b>The backlog isn't shrinking.</b> Over the last {h['days']} days about as many items were created as "
-                f"finished ({new} vs {done} a week), so the {items} open items won't clear on their own. "
-                f"Even if nothing new were added, they'd take until <b>{when}</b> (85% confidence).")
+                f"finished ({new} vs {done} a week). Today's {items} open items would be done by <b>{when}</b> "
+                "(85% confidence), but new work keeps landing, so re-forecast as it arrives.")
     assert when in text, "the headline date must appear"
     assert str(items) in text, "the open item count must appear"
     return text
@@ -195,7 +195,7 @@ def stuck_bullet(f: Facts) -> str:
 def summary_section(f: Facts, prio: dict | None) -> str:
     fc = f.forecast
     bullets = [backlog_bullet(f), trend_bullet(f)]
-    chance = (fc.get("chance") or {}).get("no_growth")
+    chance = fc.get("chance")
     if fc.get("target_date") and chance is not None:
         bullets.append(f"There's a <b>{pct(chance)} chance</b> of clearing today's backlog by "
                        f"{long_date(fc['target_date'])}, even with nothing new added.")
@@ -205,7 +205,7 @@ def summary_section(f: Facts, prio: dict | None) -> str:
         bullets.append(stuck_bullet(f))
     if f.done_but_open:
         bullets.append(f"{len(f.done_but_open)} epics are marked Done in Jira but still have open work.")
-    bullets += [escape(w[0].upper() + w[1:]) + "." for w in fc.get("warnings", []) if "created at least as fast" not in w]
+    bullets += [escape(w[0].upper() + w[1:]) + "." for w in fc.get("warnings", []) if "at least as fast" not in w]
     shown = [b for b in bullets if b]
     assert shown[0] == bullets[0], "the backlog finding always leads"
     assert len(shown) <= 9, f"{len(shown)} bullets is not a short version"
@@ -221,7 +221,7 @@ def tiles(f: Facts) -> str:
     cells = [("Backlog", "Shrinking" if f.shrinking else "Not shrinking",
               f"{per_week(h['completed_per_week'])} finished vs {per_week(h['created_per_week'])} created a week"),
              ("If nothing new is added", long_date(f.p85), "85% confidence")]
-    chance = (fc.get("chance") or {}).get("no_growth")
+    chance = fc.get("chance")
     if fc.get("target_date") and chance is not None:
         cells.append((f"Chance done by {long_date(fc['target_date'])}", pct(chance), "if nothing new is added"))
     cells.append(("Stuck in progress", str(len(f.stuck)), "older than 85% of finished items"))
@@ -237,16 +237,16 @@ def tiles(f: Facts) -> str:
 
 def when_section(f: Facts) -> str:
     fc, h = f.forecast, f.forecast["history"]
-    pcts = fc["percentiles"]["no_growth"]
+    pcts = fc["percentiles"]
     start = as_date(fc["start"])
-    chart = FinishChart(fc["_samples"]["days (no_growth)"], start, pcts, fc.get("target_date"))
+    chart = FinishChart(fc["_samples"]["days"], start, pcts, fc.get("target_date"))
     pct_line = "".join(f"<span>{p}% by <b>{long_date(pcts[f'p{p}'])}</b></span>" for p in PERCENT_POINTS)
     weekly = cdf(chart.samples, (as_date(pcts["p95"]) - start).days + 14) if pcts["p95"] else []
     chance_rows = [[long_date(start + timedelta(days=d)), f"{weekly[d]:.0%}"] for d in range(7, len(weekly), 7)]
     caveat = "" if f.shrinking else (
-        f'<p class="callout">This assumes nothing new is added. At the current rate ({per_week(h["created_per_week"])} '
-        f"created, {per_week(h['completed_per_week'])} finished a week) the backlog won't shrink, so treat these dates "
-        "as a best case.</p>")
+        f'<p class="callout">This covers today\'s backlog. New work is arriving about as fast as work is finished '
+        f"({per_week(h['created_per_week'])} created, {per_week(h['completed_per_week'])} finished a week), "
+        "so forecast again as it lands.</p>")
     toggle = ('<div class="toggle" role="group" aria-label="Chart view">'
               '<button type="button" data-view="pdf" aria-pressed="true">How likely each date is</button>'
               '<button type="button" data-view="cdf" aria-pressed="false">Chance done by date</button></div>')
@@ -403,7 +403,7 @@ def cleanup_section(f: Facts, open_without_epic: int) -> str:
             + "".join(f"<li>{c}</li>" for c in items) + "</ul></section>")
 
 
-MODEL_LABELS = {"when/no_growth": "Backlog finish date", "when/scope_growth": "Backlog finish date (with new work)",
+MODEL_LABELS = {"when": "Backlog finish date",
                 "how_many": "Items by a date", "epic/current_pace": "Epic finish date"}
 
 

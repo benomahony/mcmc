@@ -477,7 +477,7 @@ def epic_row(plot: Plot, chart: EpicChart, i: int) -> list[str]:
     xs = [plot.x((as_date(d) - chart.start).days if d else plot.hi) for _, _, d in marks]
     if len(xs) == 2:
         out.append(f'<line x1="{min(xs):.1f}" x2="{max(xs):.1f}" y1="{cy:.1f}" y2="{cy:.1f}" stroke="var(--axis)" stroke-width="2"/>')
-    for (label, color, d), cx in zip(marks, xs, strict=True):
+    for (label, color, d), cx in zip(marks, xs):
         when = long_date(d) if d else f"more than {chart.max_days // 365} years away"
         title = f"{e['epic']}: {e['open']} open"
         out.append(f'<g class="mark"{tip(title, (when, label + ", 85% confidence", color))}>'

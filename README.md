@@ -4,8 +4,8 @@ Claude Code plugin for Monte Carlo delivery forecasts from Jira throughput.
 
 Ask things like *"when will the PAY-123 epic be done?"* or *"how many PAY tickets can we close by Christmas?"*.
 Claude syncs resolved-issue history and the open backlog via your Jira MCP into a local
-SQLite database, then resamples daily throughput 10,000× to give 50/70/85/95% answers, with and
-without scope growth. Repeat runs sync incrementally, and every forecast is recorded so
+SQLite database, then resamples daily throughput 10,000× to give 50/70/85/95% answers for
+today's backlog (forecast again as new work arrives). Repeat runs sync incrementally, and every forecast is recorded so
 `calibrate` can show how well past p85 answers held up.
 
 ## Install
@@ -34,7 +34,7 @@ python3 $M sync-info PAY                       # full or incremental, and since 
 python3 $M ingest PAY issues.json --full --jql 'project = PAY'
 python3 $M forecast PAY                        # when will the open backlog be done?
 python3 $M forecast PAY --by 2026-12-18        # how many by a date?
-python3 $M stats PAY                           # throughput, arrivals, lead time by type
+python3 $M stats PAY                           # finished vs created, lead time by type
 python3 $M calibrate                           # how past forecasts held up
 python3 $M epics PAY --order PAY-98,PAY-123    # per-epic: current pace, priority order, sole focus
 python3 $M aging PAY                           # open items older than their type usually takes

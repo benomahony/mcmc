@@ -90,24 +90,18 @@ def percentile(sorted_values: Sequence[float], p: int) -> float:
     return value
 
 
-def simulate_when(history: Sequence[int], items: int, sim: Sim, arrivals: Sequence[int] | None = None) -> list[float]:
+def simulate_when(history: Sequence[int], items: int, sim: Sim) -> list[float]:
     """Days until `items` are done, one per run, ascending; math.inf where a run passes sim.max_days.
 
-    With `arrivals` (daily new-item counts aligned with `history`), each simulated day
-    samples one historical day and applies both its throughput and its arrivals.
+    The backlog is taken as it is now: when new work arrives, forecast again.
     """
     _check_history(history)
     assert items > 0, f"nothing to forecast: items={items}"
-    assert arrivals is None or len(arrivals) == len(history), (
-        f"arrivals ({len(arrivals or [])} days) must align day by day with history ({len(history)} days)"
-    )
-    days_idx = range(len(history))
     results: list[float] = []
     for _ in range(sim.runs):
         remaining, days = items, 0
         while remaining > 0 and days < sim.max_days:
-            i = sim.rng.choice(days_idx)
-            remaining -= history[i] - (arrivals[i] if arrivals else 0)
+            remaining -= sim.rng.choice(history)
             days += 1
         results.append(days if remaining <= 0 else math.inf)
     results.sort()
@@ -166,9 +160,9 @@ def simulate_priority(history: Sequence[int], remaining: Sequence[int], sim: Sim
     if plan.wip == 1:
         # Strictly sequential: a stream with work left can't finish before any stream ahead of it.
         # That holds run by run, so it also holds between the sorted per-stream lists.
-        with_work = [f for f, n in zip(finish, remaining, strict=True) if n > 0]
-        for ahead, behind in zip(with_work, with_work[1:], strict=False):
-            early = next(((a, b) for a, b in zip(ahead, behind, strict=True) if a > b), None)
+        with_work = [f for f, n in zip(finish, remaining) if n > 0]
+        for ahead, behind in zip(with_work, with_work[1:]):
+            early = next(((a, b) for a, b in zip(ahead, behind) if a > b), None)
             assert early is None, f"a later stream finished on day {early and early[1]}, before day {early and early[0]}"
     return finish
 

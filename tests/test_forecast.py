@@ -108,15 +108,6 @@ def test_constant_throughput_gives_one_exact_answer(per_day, items, sim):
 
 @FAST
 @given(histories, st.integers(1, 40), st.integers(1, 30), seeds)
-def test_zero_arrivals_change_nothing(history, items, runs, seed):
-    plain = simulate_when(history, items, Sim(runs, random.Random(seed)))
-    zero = simulate_when(history, items, Sim(runs, random.Random(seed)), arrivals=[0] * len(history))
-    assert plain == zero, f"zero arrivals changed the forecast: {plain} vs {zero}"
-    assert len(plain) == runs, f"{len(plain)} results for {runs} runs"
-
-
-@FAST
-@given(histories, st.integers(1, 40), st.integers(1, 30), seeds)
 def test_chance_by_the_pth_date_is_at_least_p(history, items, runs, seed):
     results = simulate_when(history, items, Sim(runs, random.Random(seed)))
     for p in (50, 85, 95):
@@ -126,17 +117,9 @@ def test_chance_by_the_pth_date_is_at_least_p(history, items, runs, seed):
         assert cutoff in results, f"p{p}={cutoff} isn't a simulated outcome"
 
 
-def test_new_work_arriving_slows_completion():
-    history = [3, 1, 2, 0, 4] * 6
-    plain = simulate_when(history, 50, Sim(2000, random.Random(1)))
-    grown = simulate_when(history, 50, Sim(2000, random.Random(1)), arrivals=[1, 0, 1, 1, 0] * 6)
-    assert percentile(grown, 85) > percentile(plain, 85), f"p85 {percentile(grown, 85)} with arrivals vs {percentile(plain, 85)}"
-    assert percentile(grown, 50) > percentile(plain, 50), f"p50 {percentile(grown, 50)} with arrivals vs {percentile(plain, 50)}"
-
-
 def test_runs_that_never_finish_are_infinite():
-    results = simulate_when([1], 5, Sim(10, random.Random(0), max_days=50), arrivals=[1])
-    assert all(r == math.inf for r in results), f"one in, one out never finishes, got {results}"
+    results = simulate_when([1], 100, Sim(10, random.Random(0), max_days=50))
+    assert all(r == math.inf for r in results), f"100 items at 1 a day can't finish within 50 days, got {results}"
     assert when_date(date(2026, 1, 1), results[0]) is None, f"a run that never finishes ({results[0]}) has no date"
 
 
@@ -161,7 +144,7 @@ def test_how_many_is_bounded_by_the_best_and_worst_days(history, days, sim):
 def test_priority_finish_days_are_bounded(history, remaining, sim, wip):
     finish = simulate_priority(history, remaining, sim, Plan(wip=wip))
     assert len(finish) == len(remaining), f"{len(finish)} streams back for {len(remaining)} scheduled"
-    for f, n in zip(finish, remaining, strict=True):
+    for f, n in zip(finish, remaining):
         fastest = math.ceil(n / max(history))
         assert f == sorted(f) and len(f) == sim.runs, f"stream of {n}: expected {sim.runs} sorted days, got {f}"
         assert f[0] >= fastest, f"a stream of {n} items can't finish in under {fastest} days, got {f[0]}"
@@ -173,7 +156,7 @@ def test_last_sequential_stream_takes_as_long_as_all_the_work(history, remaining
     finish = simulate_priority(history, remaining, sim, Plan())
     together = math.ceil(sum(remaining) / max(history))
     assert finish[-1][0] >= together, f"all {sum(remaining)} items can't be done in under {together} days"
-    assert all(a[0] <= b[0] for a, b in zip(finish, finish[1:], strict=False)), f"streams finished out of order: {finish}"
+    assert all(a[0] <= b[0] for a, b in zip(finish, finish[1:])), f"streams finished out of order: {finish}"
 
 
 def test_priority_order_and_wip():

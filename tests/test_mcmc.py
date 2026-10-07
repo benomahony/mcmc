@@ -104,16 +104,20 @@ def test_forecast_when_uses_db_backlog_and_type_filter(db, capsys, tmp_path):
     assert out["history"]["completed"] == 60
     # Stories: throughput is exactly 1/day, no Story arrivals in window except the backlog's creation day.
     end = START + timedelta(60)
-    assert out["percentiles"]["no_growth"]["p85"] == (end + timedelta(20)).isoformat()
+    assert out["percentiles"]["p85"] == (end + timedelta(20)).isoformat()
 
 
-def test_scope_growth_forecast_is_later(db, capsys, tmp_path):
+def test_when_forecast_covers_todays_backlog_and_says_to_reforecast(db, capsys, tmp_path):
     seed_steady(db, capsys, tmp_path)
+    # Bugs arrive at 0.5/day while 1/day is finished: no warning. Add a flood of new work and it warns.
     out = json.loads(run(db, capsys, "forecast", "PAY", "--window", "60", "--seed", "1", "--json"))
-    assert out["items"] == 50  # 20 open stories + 30 open bugs
-    p = out["percentiles"]
-    assert p["scope_growth"]["p85"] > p["no_growth"]["p85"]
-    assert set(out["forecast_ids"]) == {"no_growth", "scope_growth"}
+    assert out["items"] == 50, f"20 open stories + 30 open bugs, got {out['items']}"
+    assert set(out["percentiles"]) == {"p50", "p70", "p85", "p95"}, f"one answer per percentile, got {out['percentiles']}"
+    assert "warnings" not in out, f"no intake warning while the backlog shrinks: {out.get('warnings')}"
+    flood = [jira_issue(f"N-{i}", START + timedelta(1 + i % 60)) for i in range(120)]
+    run(db, capsys, "ingest", "PAY", write(tmp_path, flood), "--as-of", str(START + timedelta(60)))
+    out = json.loads(run(db, capsys, "forecast", "PAY", "--window", "60", "--seed", "1", "--no-record", "--json"))
+    assert any("forecast again" in w for w in out["warnings"]), f"expected a re-forecast warning, got {out['warnings']}"
 
 
 def test_how_many_records_and_calibrates(db, capsys, tmp_path):
@@ -134,7 +138,7 @@ def test_how_many_records_and_calibrates(db, capsys, tmp_path):
 
 def test_when_calibration_tracks_original_backlog(db, capsys, tmp_path):
     seed_steady(db, capsys, tmp_path, open_items=5)
-    run(db, capsys, "forecast", "PAY", "--type", "Story", "--window", "60", "--no-scope-growth", "--json")
+    run(db, capsys, "forecast", "PAY", "--type", "Story", "--window", "60", "--json")
     end = START + timedelta(60)
     done = [jira_issue(f"O-{i}", START, end + timedelta(i + 1)) for i in range(5)]
     run(db, capsys, "ingest", "PAY", write(tmp_path, done), "--as-of", str(end + timedelta(6)))
@@ -235,8 +239,8 @@ def test_chance_of_hitting_target_date_and_count(db, capsys, tmp_path):
     seed_steady(db, capsys, tmp_path)  # Stories: exactly 1/day; 20 open Stories
     end = START + timedelta(60)
     f = lambda *a: json.loads(run(db, capsys, "forecast", "PAY", "--type", "Story", "--window", "60", "--no-record", "--json", *a))
-    assert f("--target-date", str(end + timedelta(20)))["chance"]["no_growth"] == 1.0
-    assert f("--target-date", str(end + timedelta(19)))["chance"]["no_growth"] == 0.0
+    assert f("--target-date", str(end + timedelta(20)))["chance"] == 1.0
+    assert f("--target-date", str(end + timedelta(19)))["chance"] == 0.0
     assert f("--by", str(end + timedelta(10)), "--at-least", "10")["chance"] == 1.0
     assert f("--by", str(end + timedelta(10)), "--at-least", "11")["chance"] == 0.0
     with pytest.raises(SystemExit):

@@ -129,13 +129,16 @@ def history_summary(h: History) -> dict:
                                  "completed_per_week": done_wk, "created_per_week": new_wk}
 
 
-def forecast_warnings(h: History, modelling_growth: bool) -> list[str]:
+def forecast_warnings(h: History, when: bool) -> list[str]:
     """Plain-language caveats about the history behind a forecast."""
     warnings = []
     if h.completed < LOW_HISTORY:
         warnings.append(f"only {h.completed} completions in history; low confidence")
-    if modelling_growth and h.created >= h.completed:
-        warnings.append("items are being created at least as fast as they are completed; the backlog is not shrinking")
+    if when and h.created >= h.completed:
+        warnings.append(
+            "items are being created at least as fast as they are completed, so the backlog isn't shrinking; "
+            "this date covers today's backlog only, so forecast again as new work arrives"
+        )
     assert len(warnings) <= 2, f"unexpected warnings {warnings}"
     assert all(w and w[0].islower() for w in warnings), f"warnings are lower-case sentence fragments, got {warnings}"
     return warnings
@@ -174,30 +177,25 @@ def how_many_forecast(con: Connection, args: Namespace, run: Run) -> dict:
 
 
 def when_forecast(con: Connection, args: Namespace, run: Run) -> dict:
-    """When the open backlog (or args.items) will be done, with and without new work arriving."""
+    """When today's open backlog (or args.items) will be done. New work isn't modelled: forecast again when it arrives."""
     keys = store.open_keys(con, run.history.selection)
     items = args.items if args.items is not None else len(keys)
     if items <= 0:
         raise UserError("nothing is open in this scope, so there is nothing to forecast")
     deadline = target_days(run.start, args.target_date)
-    out: dict = {"kind": "when", "items": items, "percentiles": {}, "finished_within_limit": {}, "_samples": {},
-                 "max_days": args.max_days}
+    results = simulate_when(run.history.throughput, items, Sim(args.runs, run.rng, args.max_days))
+    pct = percentile_dates(run.start, results)
+    finished = round(sum(r != math.inf for r in results) / len(results), 4)
+    out: dict = {"kind": "when", "items": items, "percentiles": pct, "finished_within_limit": finished,
+                 "max_days": args.max_days, "_samples": {"days": results}}
     if deadline is not None:
-        out |= {"target_date": args.target_date.isoformat(), "chance": {}}
-    models = [("no_growth", None)] + ([] if args.no_scope_growth else [("scope_growth", run.history.arrivals)])
-    for name, arrivals in models:
-        results = simulate_when(run.history.throughput, items, Sim(args.runs, run.rng, args.max_days), arrivals)
-        out["percentiles"][name] = pct = percentile_dates(run.start, results)
-        out["finished_within_limit"][name] = round(sum(r != math.inf for r in results) / len(results), 4)
-        out["_samples"][f"days ({name})"] = results
-        if deadline is not None:
-            out["chance"][name] = chance(results, lambda r: r <= deadline)
-        if not args.no_record:
-            rec = SavedForecast(run.history.selection, "when", run.history.window, run.start, pct,
-                                 scope_growth=arrivals is not None, items=items, keys=keys if args.items is None else ())
-            out.setdefault("forecast_ids", {})[name] = store.save_forecast(con, rec, datetime.now())
-    assert set(out["percentiles"]) == {name for name, _ in models}, f"missing a model in {sorted(out['percentiles'])}"
-    assert all(0 <= v <= 1 for v in out["finished_within_limit"].values()), f"bad share {out['finished_within_limit']}"
+        out |= {"target_date": args.target_date.isoformat(), "chance": chance(results, lambda r: r <= deadline)}
+    if not args.no_record:
+        rec = SavedForecast(run.history.selection, "when", run.history.window, run.start, pct,
+                            items=items, keys=keys if args.items is None else ())
+        out["forecast_id"] = store.save_forecast(con, rec, datetime.now())
+    assert 0 <= finished <= 1, f"share of runs finishing is {finished}"
+    assert len(results) == args.runs, f"{len(results)} results for {args.runs} runs"
     return out
 
 
@@ -211,7 +209,7 @@ def forecast_data(con: Connection, args: Namespace) -> dict:
     run = Run(history, args.start or window.end, random.Random(args.seed))
     out: dict = {"scope": args.scope, "types": list(sel.types) if sel.types else None, "history": history_summary(history),
                  "start": run.start.isoformat(), "runs": args.runs}
-    if warnings := forecast_warnings(history, modelling_growth=not args.by and not args.no_scope_growth):
+    if warnings := forecast_warnings(history, when=not args.by):
         out["warnings"] = warnings
     out |= how_many_forecast(con, args, run) if args.by else when_forecast(con, args, run)
     assert out["kind"] in ("when", "how_many"), f"unknown forecast kind {out['kind']}"
@@ -289,7 +287,7 @@ def plan_forecast(con: Connection, args: Namespace, run: EpicRun, epics: list[di
     sim = Sim(args.runs, run.rng, args.max_days)
     finish = simulate_priority(run.team, [by_key[k]["open"] for k in order], sim, Plan(share, args.wip))
     deadline = run.deadline
-    for key, results in zip(order, finish, strict=True):
+    for key, results in zip(order, finish):
         by_key[key]["priority"] = percentile_dates(run.start, results)
         if deadline is not None:
             by_key[key].setdefault("chance", {})["priority"] = chance(results, lambda d: d <= deadline)
@@ -357,12 +355,11 @@ def evaluate_how_many(con: Connection, f: dict, pct: dict, synced_to: date) -> d
 def evaluate_when(con: Connection, f: dict, pct: dict, synced_to: date) -> dict:
     """A when forecast holds at pN if its backlog was cleared by the pN date."""
     if f["scope_growth"]:
-        actual = store.backlog_cleared(con, f)
-    else:
-        total, still_open, last = store.tracked_items(con, f)
-        if not total:
-            return {"actual": None, "hits": dict.fromkeys(pct), "note": "explicit --items; not trackable"}
-        actual = last if still_open == 0 else None
+        return {"actual": None, "hits": dict.fromkeys(pct), "note": "retired scope-growth model; not scored"}
+    total, still_open, last = store.tracked_items(con, f)
+    if not total:
+        return {"actual": None, "hits": dict.fromkeys(pct), "note": "explicit --items; not trackable"}
+    actual = last if still_open == 0 else None
     hits = hits_for_date(actual, pct, synced_to)
     assert actual is None or actual >= f["start"], f"cleared {actual}, before the forecast started {f['start']}"
     assert set(hits) == set(pct), f"hits {sorted(hits)} for percentiles {sorted(pct)}"
@@ -376,7 +373,7 @@ def model_name(f: dict) -> str:
     elif f["kind"] == "how_many":
         name = "how_many"
     else:
-        name = f"when/{'scope_growth' if f['scope_growth'] else 'no_growth'}"
+        name = "when (retired scope-growth model)" if f["scope_growth"] else "when"
     assert f["kind"] in ("when", "how_many"), f"unknown forecast kind {f['kind']!r}"
     assert not f["epic"] or f["kind"] == "when", f"epic forecast {f['id']} isn't a when forecast"
     return name

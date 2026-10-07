@@ -88,7 +88,7 @@ def test_full_then_incremental_sync_and_forecast(jira, tmp_path, capsys):
         children = search(jira, f'"Epic Link" = {e["epic"]} AND statusCategory != Done')
         assert e["open"] == sum(not c["fields"]["issuetype"]["subtask"] for c in children)
     assert forecast["history"]["completed"] > 20
-    assert forecast["percentiles"]["no_growth"]["p85"] > date.today().isoformat()
+    assert forecast["percentiles"]["p85"] > date.today().isoformat()
 
     # Close three open items in Jira, then sync only what changed.
     open_keys = [

@@ -22,5 +22,5 @@ testpaths = ["tests"]
 [tool.pyright]
 include = ["skills/forecast/scripts", "tests"]
 extraPaths = ["skills/forecast/scripts"]
-pythonVersion = "3.12"
+pythonVersion = "3.9"  # the scripts run on stock macOS python3
 typeCheckingMode = "standard"

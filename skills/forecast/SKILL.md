@@ -91,16 +91,16 @@ python3 "$M" forecast <scope> --target-date 2026-12-01 # ...plus the chance of b
 python3 "$M" forecast <scope> --by 2026-12-18 --at-least 40   # chance of finishing at least N by a date
 python3 "$M" epics <scope> [--epic PAY-123]...         # when will each open epic be done?
 python3 "$M" epics <scope> --order PAY-98,PAY-123 [--wip 2]   # ...if worked in this priority order
-python3 "$M" stats <scope>                             # weekly throughput/arrivals, lead time by type, snapshots
+python3 "$M" stats <scope>                             # weekly finished/created, lead time by type, snapshots
 python3 "$M" aging <scope> [--all]                     # open items older than their type's p85/p95 lead time
 python3 "$M" report <scope> [--order ...] [--target-date ...]  # everything above as one HTML page; prints its path
 python3 "$M" reports [<scope>]                         # saved reports, newest first, + the index page
 python3 "$M" calibrate [<scope>]                       # how past forecasts held up
 ```
 
-`forecast` defaults the remaining count to open items in the DB, and for *when* questions
-runs two models: **no_growth** (fixed backlog) and **scope_growth** (each simulated day also
-adds that historical day's created items). Epic issues are containers and never count as
+`forecast` defaults the remaining count to open items in the DB and forecasts **today's
+backlog**: new work isn't modelled. When new work arrives, sync and forecast again — that's
+what the history and calibration are for. Epic issues are containers and never count as
 items. `epics` gives two answers per epic: **current pace** (resampling that epic's own
 completions — realistic, and recorded for calibration) and **sole focus** (whole-team
 throughput on only that epic — the best case). With `--order`, it adds a **priority**
@@ -113,12 +113,11 @@ Add `--json` to post-process.
 
 ## 4. Report
 
-- Lead with the **85% confidence** answer; show 50/70/85/95 in a small table, both models
-  side by side for *when* questions. Explain that scope_growth is the realistic one when work
-  keeps being added (projects, living epics), no_growth when the scope is frozen.
+- Lead with the **85% confidence** answer; show 50/70/85/95 in a small table. Say it covers
+  today's backlog, and suggest re-forecasting after new work lands.
 - State the inputs: scope JQL, history window, completed vs created per week, remaining count.
-- Relay any `warnings` (low history, backlog not shrinking). If scope_growth doesn't finish,
-  say plainly that at current rates the backlog never empties — that is the finding.
+- Relay any `warnings` (low history; new work arriving as fast as it's finished, which means
+  the date will move and should be re-forecast as work arrives).
 - For epics, show one row per epic: open items, completions in the window, current-pace
   p50/p85, sole-focus p85. "No progress" means nothing finished in the window, so there is no
   pace to project — say so rather than guessing. A wide gap between current pace and sole
@@ -126,7 +125,7 @@ Add `--json` to post-process.
   Call out epics marked done that still have open children — the epic status is wrong or
   the children belong elsewhere.
 - When the user names a date or a number ("will we make 1 Dec?", "can we do 40?"), answer
-  with the **chance** first ("7% if nothing is added, ~0% at the current intake"), then the
+  with the **chance** first ("7% chance by 1 Dec for today's backlog"), then the
   percentile table for context.
 - For *how many*, higher confidence means a **lower** number ("85% likely to finish at least N").
 - For aging, lead with counts (stale = older than p95 lead time, at risk = older than p85),

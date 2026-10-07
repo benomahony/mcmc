@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS forecasts (
     scope TEXT,
     made_at TIMESTAMP,
     kind TEXT,              -- 'when' | 'how_many'
-    scope_growth BOOLEAN,
+    scope_growth BOOLEAN,   -- retired model; always false for new forecasts
     start DATE,
     target_date DATE,       -- how_many only
     items INTEGER,          -- when only
@@ -163,7 +163,6 @@ class SavedForecast:
     window: Window
     start: date
     percentiles: dict
-    scope_growth: bool = False
     target_date: date | None = None
     items: int | None = None
     keys: Sequence[str] = field(default_factory=tuple)
@@ -226,7 +225,7 @@ def rows_as_dicts(cursor: sqlite3.Cursor) -> list[dict]:
     """Rows from the last query as dicts keyed by column name."""
     assert cursor.description is not None, "the last statement returned no result set"
     cols = [c[0] for c in cursor.description]
-    rows = [dict(zip(cols, r, strict=True)) for r in cursor.fetchall()]
+    rows = [dict(zip(cols, r)) for r in cursor.fetchall()]
     assert len(set(cols)) == len(cols), f"duplicate column names would lose values: {cols}"
     return rows
 
@@ -467,7 +466,7 @@ def save_forecast(con: Connection, rec: SavedForecast, made_at: datetime) -> int
             """INSERT INTO forecasts (scope, made_at, kind, scope_growth, start, target_date, items, types,
                                       history_start, history_end, percentiles, epic)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
-            [rec.selection.scope, made_at, rec.kind, rec.scope_growth, rec.start, rec.target_date, rec.items,
+            [rec.selection.scope, made_at, rec.kind, False, rec.start, rec.target_date, rec.items,
              rec.selection.type_params[0], rec.window.start, rec.window.end, json.dumps(rec.percentiles), rec.epic],
         )
         if rec.keys:
@@ -504,29 +503,6 @@ def tracked_items(con: Connection, f: dict) -> tuple[int, int, date | None]:
     assert 0 <= still_open <= total, f"{still_open} open of {total} tracked items"
     assert last is None or isinstance(last, date), f"last resolution {last!r} is not a date"
     return total, still_open, last
-
-
-def backlog_cleared(con: Connection, f: dict) -> date | None:
-    """First day after the forecast's start when every in-scope item created by then was resolved by then."""
-    sel = Selection(f["scope"], tuple(f["types"]) if f["types"] else None)
-    (cleared,) = one(
-        con,
-        """
-        WITH s AS (
-            SELECT * FROM issues WHERE scope = ?
-            AND (CASE WHEN ? IS NULL THEN coalesce(issue_type, '') <> 'Epic'
-                     ELSE issue_type IN (SELECT value FROM json_each(?)) END)
-        ),
-        candidates AS (SELECT DISTINCT resolved AS d FROM s WHERE resolved > ?)
-        SELECT min(d) AS "cleared [DATE]" FROM candidates
-        WHERE NOT EXISTS (
-            SELECT 1 FROM s WHERE created <= d AND (resolved IS NULL OR resolved > d) AND NOT (done AND resolved IS NULL)
-        )""",
-        [sel.scope, *sel.type_params, f["start"]],
-    )
-    assert cleared is None or cleared > f["start"], f"backlog cleared on {cleared}, before the forecast start {f['start']}"
-    assert cleared is None or isinstance(cleared, date), f"SQLite returned {cleared!r} for a DATE column"
-    return cleared
 
 
 def resolved_between(con: Connection, f: dict) -> int:

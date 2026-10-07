@@ -87,7 +87,7 @@ def as_bool(value: object) -> bool:
         text = value.strip().lower()
         assert text in ("true", "false", "1", "0", "", "yes", "no"), f"not a yes/no value: {value!r}"
         return text in ("true", "1", "yes")
-    assert value is None or isinstance(value, bool | int), f"not a yes/no value: {value!r}"
+    assert value is None or isinstance(value, (bool, int)), f"not a yes/no value: {value!r}"
     return bool(value)
 
 
@@ -151,6 +151,6 @@ def load_issues(raw: str, epic_field: str | None = None) -> list[dict]:
     issues = [normalise(i, epic_field) for i in parse_payload(raw)]
     blank = [i for i in issues if not i["key"].strip()]
     assert not blank, f"{len(blank)} issues have a blank key"
-    undated = [i["key"] for i in issues if not isinstance(i["created"], date | None)]
+    undated = [i["key"] for i in issues if not isinstance(i["created"], (date, type(None)))]
     assert not undated, f"created must be a date or missing: {undated}"
     return issues
